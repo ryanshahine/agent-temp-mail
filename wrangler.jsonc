@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agent-temp-mail",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-15",
+  "workers_dev": true,
+  "observability": {
+    "enabled": false
+  },
+  "vars": {
+    "DOMAIN": "agent-temp-mail.com",
+    "ADMIN_PUBLIC_KEY": "5nhl5ycsiq452pq4zkhzvslmbzdbbjkph6kbxsyzfhlvljhkoeba",
+    "API_ORIGIN": "https://agent-temp-mail.com"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "agent-temp-mail",
+      "database_id": "156d13bb-4d77-4161-8263-d506dafe1cd3",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  },
+  "account_id": "2aafe2f9740540f8bb26ed21a78abc95",
+  "routes": [
+    {
+      "pattern": "agent-temp-mail.com",
+      "custom_domain": true
+    }
+  ]
+}

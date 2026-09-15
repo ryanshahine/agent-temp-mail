@@ -1,0 +1,373 @@
+import { env } from "cloudflare:test";
+import { describe, it, expect } from "vitest";
+import { fetchHandler } from "../src/index";
+import { receive, htmlText, candidates } from "../src/mail";
+import { cleanup } from "../src/service";
+import { base32, unbase32, now, C } from "../src/core";
+import { generateIdentity, MailClient, signedHeaders } from "../sdk/client.mjs";
+const origin = "https://agent-temp-mail.com";
+function client(identity = generateIdentity()) {
+  return new MailClient(identity, {
+    fetchImpl: (url, init) => fetchHandler(new Request(url, init), env),
+  });
+}
+async function request(identity, method, path, body = "", overrides = {}) {
+  return fetchHandler(
+    new Request(origin + path, {
+      method,
+      headers: {
+        ...signedHeaders(identity, method, origin + path, body),
+        ...overrides,
+      },
+      ...(body ? { body } : {}),
+    }),
+    env,
+  );
+}
+function fixture(
+  text = "Your verification code is 123456. Verify at https://example.com/verify?token=abc",
+  extra = "",
+) {
+  return `From: Service <noreply@example.com>\r\nTo: test@example.net\r\nSubject: Confirm your login\r\nMessage-ID: <${crypto.randomUUID()}@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n${extra}\r\n${text}`;
+}
+async function deliver(address, raw = fixture()) {
+  let rejected;
+  const b = new TextEncoder().encode(raw);
+  await receive(
+    {
+      to: address,
+      from: "bounce@example.com",
+      rawSize: b.length,
+      raw: new Response(b).body,
+      headers: new Headers(),
+      setReject: (r) => {
+        rejected = r;
+      },
+    },
+    env,
+  );
+  return rejected;
+}
+describe("identity and authorization", () => {
+  it("fits an Ed25519 public key into a canonical address", () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    expect(base32(bytes)).toHaveLength(52);
+    expect(unbase32(base32(bytes))).toEqual(bytes);
+    expect(() => unbase32("a".repeat(51) + "b")).toThrow("Noncanonical");
+  });
+  it("signs with the shipped SDK, isolates owners, and rejects tampering", async () => {
+    const a = client(),
+      b = client();
+    await a.create();
+    await expect(b.inspect(a.address)).rejects.toMatchObject({ status: 403 });
+    const path = a.box();
+    const h = signedHeaders(a.identity, "GET", origin + path);
+    const altered = await fetchHandler(
+      new Request(origin + path + "?x=1", { headers: h }),
+      env,
+    );
+    expect(altered.status).toBe(401);
+    expect(
+      (
+        await request(a.identity, "PATCH", path, '{"persistent":true}', {
+          "X-Mail-Signature": h["X-Mail-Signature"],
+        })
+      ).status,
+    ).toBe(401);
+  });
+  it("atomically rejects replayed concurrent requests", async () => {
+    const a = client();
+    await a.create();
+    const path = a.box(),
+      h = signedHeaders(a.identity, "GET", origin + path);
+    const send = () =>
+      fetchHandler(new Request(origin + path, { headers: h }), env);
+    expect(
+      (await Promise.all([send(), send()])).map((x) => x.status).sort(),
+    ).toEqual([200, 409]);
+  });
+  it("rejects old signatures and signature reuse on another origin", async () => {
+    const a = client();
+    await a.create();
+    const path = a.box();
+    const stale = signedHeaders(a.identity, "GET", origin + path, "", {
+      timestamp: String(now() - 61),
+    });
+    expect(
+      (await fetchHandler(new Request(origin + path, { headers: stale }), env))
+        .status,
+    ).toBe(401);
+    const h = signedHeaders(a.identity, "GET", origin + path);
+    expect(
+      (
+        await fetchHandler(
+          new Request("https://other.example" + path, { headers: h }),
+          env,
+        )
+      ).status,
+    ).toBe(401);
+  });
+  it("returns auth errors as JSON and prevents browser cross-origin use", async () => {
+    expect(
+      (await fetchHandler(new Request(origin + "/v1/inboxes/x"), env)).status,
+    ).toBe(401);
+    expect(
+      (
+        await fetchHandler(
+          new Request(origin + "/mcp", {
+            method: "POST",
+            headers: { Origin: "https://evil.example" },
+          }),
+          env,
+        )
+      ).status,
+    ).toBe(403);
+  });
+});
+describe("inbox lifecycle", () => {
+  it("creates idempotently, extends, persists, and changes retention only for new mail", async () => {
+    const a = client();
+    const first = await a.create();
+    expect(first.persistent).toBe(false);
+    await deliver(a.address);
+    const page = await a.list();
+    const before = await a.get(page.messages[0].id);
+    await a.extend({ persistent: true, retention_seconds: 604800 });
+    expect((await a.create()).persistent).toBe(true);
+    expect((await a.get(before.id)).expires_at).toBe(before.expires_at);
+    const after = await a.extend({ persistent: false, ttl_seconds: 3600 });
+    expect(after.persistent).toBe(false);
+    await expect(
+      a.extend({ persistent: true, ttl_seconds: 3600 }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+  it("hides expired data immediately and allows same-owner recreation", async () => {
+    const a = client();
+    await a.create();
+    await deliver(a.address);
+    await env.DB.prepare("UPDATE inboxes SET expires_at=? WHERE address=?")
+      .bind(now() - 1, a.address)
+      .run();
+    await expect(a.inspect()).rejects.toMatchObject({ status: 410 });
+    expect(await deliver(a.address)).toContain("expired");
+    await a.create();
+    expect((await a.list()).messages).toHaveLength(0);
+    expect((await env.DB.prepare("SELECT * FROM usage").first()).messages).toBe(
+      0,
+    );
+  });
+  it("deletes all mail with its inbox and does not let another key claim it", async () => {
+    const a = client(),
+      b = client();
+    await a.create();
+    await deliver(a.address);
+    await expect(b.deleteInbox(a.address)).rejects.toMatchObject({
+      status: 403,
+    });
+    await a.deleteInbox();
+    await expect(a.inspect()).rejects.toMatchObject({ status: 404 });
+    expect((await env.DB.prepare("SELECT * FROM usage").first()).bytes).toBe(0);
+  });
+  it("protects contact aliases from ordinary keys", async () => {
+    const a = client();
+    await expect(a.inspect("hi@agent-temp-mail.com")).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(
+      a.create({ address: "hi@agent-temp-mail.com" }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+});
+describe("mail ingestion and retrieval", () => {
+  it("extracts codes and source IDs, filters, pages and continues after an empty poll", async () => {
+    const a = client();
+    await a.create();
+    const empty = await a.list();
+    await deliver(a.address, fixture("Your code is 123456"));
+    await deliver(a.address, fixture("Your code is 654321"));
+    const page = await a.list({
+      after: empty.after,
+      limit: 1,
+      sender: "NOREPLY@EXAMPLE.COM",
+      since: new Date((now() - 5) * 1000).toISOString(),
+    });
+    expect(page.messages).toHaveLength(1);
+    expect(page.has_more).toBe(true);
+    const next = await a.list({ after: page.after, limit: 1 });
+    expect(next.messages[0].id).not.toBe(page.messages[0].id);
+    expect((await a.list({ after: next.after })).messages).toHaveLength(0);
+    const found = await a.candidates({ limit: 1 });
+    expect(found.messages[0].candidates.source_message_id).toBe(
+      page.messages[0].id,
+    );
+    expect(found.messages[0].candidates.otp_codes[0].value).toBe("123456");
+    expect(
+      (await a.list({ sender: "other@example.com" })).messages,
+    ).toHaveLength(0);
+  });
+  it("converts HTML-only mail and discards attachment contents and scripts", async () => {
+    const a = client();
+    await a.create();
+    const mime = `From: Sender <noreply@example.com>\r\nSubject: Verify\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="xxx"\r\n\r\n--xxx\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>Your code is <b>889900</b></p><a href="https://example.com/verify?a=1&amp;b=2">Verify</a><script>BAD_SCRIPT</script><img src="https://tracker.invalid">\r\n--xxx\r\nContent-Type: text/plain\r\nContent-Disposition: attachment; filename="secret.txt"\r\n\r\nATTACHMENT_SECRET code 777777\r\n--xxx--`;
+    expect(await deliver(a.address, mime)).toBeUndefined();
+    const item = await a.get((await a.list()).messages[0].id);
+    expect(item.text).toContain("889900");
+    expect(item.text).not.toMatch(
+      /BAD_SCRIPT|ATTACHMENT_SECRET|tracker.invalid/,
+    );
+    expect(item.attachments_removed).toBe(true);
+    expect(item.candidates.links[0].url).toBe(
+      "https://example.com/verify?a=1&b=2",
+    );
+    const row = await env.DB.prepare(
+      "SELECT text,candidates FROM messages",
+    ).first();
+    expect(JSON.stringify(row)).not.toContain("ATTACHMENT_SECRET");
+  });
+  it("deduplicates identical deliveries and maintains storage counters", async () => {
+    const a = client();
+    await a.create();
+    const raw = fixture();
+    await deliver(a.address, raw);
+    await deliver(a.address, raw);
+    expect((await a.list()).messages).toHaveLength(1);
+    const msg = (await a.list()).messages[0];
+    await a.deleteMessage(msg.id);
+    expect((await a.inspect()).stored_bytes).toBe(0);
+  });
+  it("rejects unknown and oversized mail without storing it", async () => {
+    expect(await deliver("unknown@agent-temp-mail.com")).toContain("Unknown");
+    const a = client();
+    await a.create();
+    expect(await deliver(a.address, fixture("x".repeat(C.raw)))).toContain(
+      "256 KiB",
+    );
+    expect((await a.list()).messages).toHaveLength(0);
+  });
+  it("truncates UTF-8 safely and rejects cross-inbox cursors", async () => {
+    const a = client(),
+      b = client();
+    await a.create();
+    await b.create();
+    await deliver(
+      a.address,
+      fixture("Your code is 123456. " + "é".repeat(40000)),
+    );
+    const item = await a.get((await a.list()).messages[0].id);
+    expect(item.truncated).toBe(true);
+    expect(new TextEncoder().encode(item.text).length).toBeLessThanOrEqual(
+      C.text,
+    );
+    expect(item.text).not.toContain("\ufffd");
+    await expect(
+      b.list({ after: (await a.list()).after }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+  it("hides expired messages and reclaims counters in cleanup", async () => {
+    const a = client();
+    await a.create({ persistent: true });
+    await deliver(a.address);
+    const id = (await a.list()).messages[0].id;
+    await env.DB.prepare("UPDATE messages SET expires_at=?")
+      .bind(now() - 1)
+      .run();
+    expect((await a.list()).messages).toHaveLength(0);
+    await expect(a.get(id)).rejects.toMatchObject({ status: 404 });
+    await cleanup(env);
+    expect((await a.inspect()).stored_bytes).toBe(0);
+  });
+  it("enforces capacity atomically in SQL", async () => {
+    const a = client();
+    await a.create();
+    await env.DB.prepare("UPDATE usage SET bytes=67108864 WHERE id=1").run();
+    expect(await deliver(a.address)).toContain("capacity");
+    expect((await a.list()).messages).toHaveLength(0);
+    await env.DB.prepare("UPDATE usage SET bytes=0 WHERE id=1").run();
+  });
+});
+describe("agent interfaces", () => {
+  it("bootstraps fresh keys even with the same salt, without registering", async () => {
+    const gen = async () => {
+      const r = await fetchHandler(
+        new Request(origin + "/v1/bootstrap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: '{"salt":"agent-provided"}',
+        }),
+        env,
+      );
+      expect(r.headers.get("Cache-Control")).toBe("no-store");
+      return r.json();
+    };
+    const a = await gen(),
+      b = await gen();
+    expect(a.public_key).not.toBe(b.public_key);
+    expect(a.registered).toBe(false);
+    const c = client(a);
+    await c.create();
+    expect((await c.inspect()).address).toBe(a.address);
+  });
+  it("supports MCP discovery, signed tool calls, and structured errors", async () => {
+    const a = client();
+    const call = (method, params) =>
+      a.request("POST", "/mcp", { jsonrpc: "2.0", id: 1, method, params });
+    expect(
+      (await call("initialize", { protocolVersion: "2025-11-25" })).result
+        .capabilities.tools,
+    ).toBeDefined();
+    expect((await call("tools/list", {})).result.tools).toHaveLength(8);
+    expect(
+      (
+        await call("tools/call", {
+          name: "create_inbox",
+          arguments: { persistent: true },
+        })
+      ).result.structuredContent.persistent,
+    ).toBe(true);
+    const wrong = await call("tools/call", {
+      name: "inspect_inbox",
+      arguments: { address: "hi@agent-temp-mail.com" },
+    });
+    expect(wrong.result.isError).toBe(true);
+    expect(wrong.result.structuredContent.error.code).toBe("mailbox_forbidden");
+    const unauth = await fetchHandler(
+      new Request(origin + "/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "inspect_inbox" },
+        }),
+      }),
+      env,
+    );
+    expect(unauth.status).toBe(401);
+  });
+  it("publishes Markdown and machine-readable contracts without credentials", async () => {
+    const home = await fetchHandler(new Request(origin), env);
+    expect(home.headers.get("Content-Type")).toContain("text/markdown");
+    expect(await home.text()).toContain("X-Mail-Signature");
+    const spec = await (
+      await fetchHandler(new Request(origin + "/openapi.json"), env)
+    ).json();
+    expect(spec.openapi).toBe("3.1.0");
+    expect(spec.paths["/v1/inboxes/{address}/candidates"]).toBeDefined();
+  });
+  it("returns actionable validation and rate-limit errors", async () => {
+    const a = client();
+    await expect(a.create({ ttl_seconds: 1 })).rejects.toMatchObject({
+      status: 400,
+      code: "invalid_parameter",
+    });
+    await env.DB.prepare(
+      "INSERT INTO limits(key,value,expires_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    )
+      .bind(`daily:api:${Math.floor(now() / 86400)}`, 6000, now() + 3600)
+      .run();
+    const r = await request(a.identity, "POST", "/v1/inboxes", "{}");
+    expect(r.status).toBe(429);
+    expect(Number(r.headers.get("Retry-After"))).toBeGreaterThan(0);
+  });
+});

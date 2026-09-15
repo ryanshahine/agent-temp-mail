@@ -1,0 +1,37 @@
+{
+  "name": "agent-temp-mail",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test",
+    "db:local": "wrangler d1 migrations apply agent-temp-mail --local",
+    "db:remote": "node scripts/migrate-remote.mjs",
+    "mcp": "node sdk/mcp.mjs",
+    "keygen": "node sdk/cli.mjs keygen",
+    "format": "prettier --write src sdk test scripts *.json *.jsonc *.ts *.md .github/workflows/*.yml",
+    "format:check": "prettier --check src sdk test scripts *.json *.jsonc *.ts *.md .github/workflows/*.yml"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "htmlparser2": "^10.0.0",
+    "postal-mime": "^2.6.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260915.1",
+    "@types/node": "^22.0.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
