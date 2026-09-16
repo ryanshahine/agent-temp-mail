@@ -1,6 +1,6 @@
 # Agent Temp Mail
 
-Email infrastructure for AI agents at **https://agent-temp-mail.com**.
+Disposable and persistent email infrastructure for AI agents at **https://agent-temp-mail.com**.
 
 An Ed25519 public key is the email address. Its private key signs API requests. There are no accounts, passwords or session tokens. Inboxes expire after 24 hours by default; persistent addresses are optional, and messages always have bounded retention.
 
