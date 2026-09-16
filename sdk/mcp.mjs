@@ -14,7 +14,7 @@ if (!process.env.MAIL_KEY_FILE) {
   process.exit(1);
 }
 const identity = await loadIdentity(process.env.MAIL_KEY_FILE, {
-  create: true,
+  create: process.env.MAIL_REQUIRE_EXISTING_KEY !== "1",
 });
 const mail = new MailClient(identity, {
   baseUrl: process.env.MAIL_BASE_URL,
@@ -32,7 +32,7 @@ async function rpc(method, params) {
   return response.result;
 }
 const server = new Server(
-  { name: "agent-temp-mail", version: "0.1.0" },
+  { name: "agent-temp-mail", version: "0.2.0" },
   { capabilities: { tools: {} } },
 );
 server.setRequestHandler(ListToolsRequestSchema, async () =>

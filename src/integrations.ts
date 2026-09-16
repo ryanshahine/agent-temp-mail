@@ -6,6 +6,7 @@ Agent Temp Mail is independent of the model provider. It requires an agent host 
 
 | Client or runtime | Connection |
 | --- | --- |
+| Codex with local MCP | Run the npm agent-temp-mail-mcp adapter |
 | Claude Code or Claude Desktop with local MCP | Run sdk/mcp.mjs as a stdio MCP server |
 | Cursor editor or CLI | Run the same stdio MCP server |
 | Grok Build with local MCP | Run the same stdio MCP server |
@@ -18,14 +19,14 @@ Support here describes integration paths. We test the protocol and SDK, not ever
 
 ## Local MCP
 
-Clone https://github.com/ryanshahine/agent-temp-mail and run npm ci. Use Node.js 22.12+.
+Use Node.js 22.12+. The npm package includes the signing SDK, CLI and local MCP server; no repository clone is needed.
 
 ~~~json
 {
   "mcpServers": {
     "agent-temp-mail": {
-      "command": "node",
-      "args": ["/absolute/path/agent-temp-mail/sdk/mcp.mjs"],
+      "command": "npx",
+      "args": ["--yes", "--package=agent-temp-mail@0.2.0", "agent-temp-mail-mcp"],
       "env": {"MAIL_KEY_FILE": "/absolute/private/path/agent.key.json"}
     }
   }
@@ -37,16 +38,32 @@ The parent directory of MAIL_KEY_FILE must exist. The adapter creates a mode-060
 Cursor supports this mcpServers structure in its MCP configuration. Claude Code also accepts stdio servers through its CLI:
 
 ~~~sh
-claude mcp add --transport stdio --env MAIL_KEY_FILE=/absolute/private/path/agent.key.json agent-temp-mail -- node /absolute/path/agent-temp-mail/sdk/mcp.mjs
+claude mcp add --transport stdio --env MAIL_KEY_FILE=/absolute/private/path/agent.key.json agent-temp-mail -- npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail-mcp
 ~~~
+
+## Codex
+
+Create a durable private directory and register the npm adapter:
+
+~~~sh
+mkdir -p "$HOME/.config/agent-temp-mail"
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail-mcp
+~~~
+
+After first use, set MAIL_REQUIRE_EXISTING_KEY=1 in the MCP environment to refuse to generate a replacement identity if the file disappears. To keep an address, call create_inbox with persistent:true; for an existing temporary inbox call extend_inbox instead. Messages retain their separate 1-hour to 7-day expiry.
+
+## HTTP tools without a signing runtime
+
+POST /v1/easy with {"tool":"create_inbox","arguments":{}} generates and registers a temporary inbox; use persistent:true inside arguments for a persistent address. Save the returned access_key privately. Later POST requests use Authorization: Bearer ACCESS_KEY and {"tool":"list_messages","arguments":{}} (or any of the eight tools). Responses wrap normal tool data in result.
+
+The access key is the mailbox private key. This opt-in mode sends it to the Worker on each call. Application code does not persist it to D1 or log it, but the server processes it in memory and chat/tool/infrastructure providers may retain it. It has no signature replay protection or recovery. Never put it in a URL. Local signing remains preferred. This REST interface needs an HTTP tool; it does not make a browsing-only chat or an OAuth-only MCP connector compatible automatically.
 
 ## API agents, including Grok
 
 The host application keeps the private key and executes the function call. The provider receives only the tool descriptions, ordinary arguments and selected results.
 
 ~~~js
-import { loadIdentity, MailClient } from './sdk/client.mjs';
-import { AgentMailTools } from './sdk/tools.mjs';
+import { loadIdentity, MailClient, AgentMailTools } from 'agent-temp-mail';
 
 const identity = await loadIdentity('./agent.key.json', { create: true });
 const tools = new AgentMailTools(new MailClient(identity));
@@ -69,6 +86,8 @@ No vendor model API calls are made by Agent Temp Mail. Any model-provider usage 
 GET /, /llms.txt and /llms-full.txt return text/markdown. GET /openapi.json publishes the HTTP contract. POST /mcp with initialize or tools/list discovers MCP capabilities. Public docs contain no generated secrets. There is no user-agent whitelist; inbox access depends on cryptographic ownership.
 
 ## Vendor references
+
+- Codex MCP: https://developers.openai.com/codex/mcp
 
 - Cursor MCP: https://cursor.com/docs/mcp
 - Claude Code MCP: https://code.claude.com/docs/en/mcp

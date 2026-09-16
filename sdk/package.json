@@ -1,0 +1,68 @@
+{
+  "name": "agent-temp-mail",
+  "version": "0.2.0",
+  "description": "Temporary and persistent inboxes for AI agents: signed email SDK, CLI and MCP server",
+  "type": "module",
+  "main": "./index.mjs",
+  "types": "./index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "import": "./index.mjs"
+    },
+    "./client": {
+      "types": "./client.d.mts",
+      "import": "./client.mjs"
+    },
+    "./tools": {
+      "types": "./tools.d.mts",
+      "import": "./tools.mjs"
+    }
+  },
+  "bin": {
+    "agent-temp-mail": "cli.mjs",
+    "agent-temp-mail-mcp": "mcp.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "index.d.mts",
+    "client.mjs",
+    "client.d.mts",
+    "tools.mjs",
+    "tools.d.mts",
+    "cli.mjs",
+    "mcp.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ryanshahine/agent-temp-mail.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://agent-temp-mail.com",
+  "bugs": {
+    "url": "https://github.com/ryanshahine/agent-temp-mail/issues"
+  },
+  "author": "Ryan Shahine",
+  "license": "MIT",
+  "keywords": [
+    "email",
+    "temp-mail",
+    "ai",
+    "agents",
+    "mcp",
+    "otp",
+    "ed25519"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

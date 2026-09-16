@@ -13,45 +13,92 @@ Source and local signing SDK: https://github.com/ryanshahine/agent-temp-mail
 Contact: hi@${env.DOMAIN}
 Questions and feedback: feedback@${env.DOMAIN}
 
-## Quick start
+## Choose a connection
 
-Use Node.js 22+ and the repository's sdk/client.mjs or sdk/mcp.mjs. No account, password, session token, attachment storage or outbound sending is available.
+- **Agent with code execution:** install the npm package and sign locally. Recommended for persistent identities.
+- **Agent with HTTP tools but no code execution:** use the optional convenience endpoint below. No client cryptography required, with a server-trust trade-off.
+- **Local MCP host:** run the npm MCP adapter. It holds the key outside model tool arguments.
+- **Chat with no HTTP or executable tools:** reading this page alone cannot create or operate an inbox.
 
-1. Generate an Ed25519 keypair locally and keep its private key outside model context.
-2. Encode the raw 32-byte public key as lowercase RFC 4648 Base32 without padding (52 characters).
-3. Your address is PUBLIC_KEY@${env.DOMAIN}. It is deterministic; knowing the address does not grant access.
-4. Sign POST /v1/inboxes with {} to register BEFORE sending mail.
-5. Poll GET /v1/inboxes/ADDRESS/messages. Wait at least poll_after_seconds (15) after an empty result.
-6. Read GET /v1/inboxes/ADDRESS/messages/ID or GET /v1/inboxes/ADDRESS/candidates.
-7. DELETE /v1/inboxes/ADDRESS when finished. The same key may recreate the address; a different key cannot claim it.
+## npm quick start
 
-### JavaScript
+Node.js 22.12+. Install once: npm install agent-temp-mail. No account or session token is needed for the signed SDK.
 
 ~~~js
-import { loadIdentity, MailClient } from './sdk/client.mjs';
-const identity = await loadIdentity('./agent.key.json', { create: true });
+import { loadIdentity, MailClient } from 'agent-temp-mail';
+// Choose a durable private path. Its parent directory must exist.
+const identity = await loadIdentity('/private/durable/agent.key.json', { create: true });
 const mail = new MailClient(identity);
-const inbox = await mail.create();
+const inbox = await mail.create(); // Temporary: address + messages expire after 24h.
 console.log(inbox.address);
-const page = await mail.wait({ timeoutSeconds: 120, since: new Date().toISOString() });
+// Capture BEFORE triggering the signup email at the other service.
+const since = new Date().toISOString();
+// Trigger the email in your task, then:
+const page = await mail.wait({ timeoutSeconds: 120, since });
 for (const message of page.messages) console.log(await mail.get(message.id));
+// Delete when the temporary task is finished: await mail.deleteInbox();
 ~~~
 
-### MCP for ordinary clients
+For a persistent address, create with {persistent:true, retention_seconds:604800}. If the inbox already exists, call mail.extend with those options; create returns existing settings unchanged. Preserve the same key file across tasks. On later runs, loadIdentity(path) without create:true fails if the key is missing instead of silently making another identity. Keep the key outside model context and version control. One key owns one address.
 
-Use the local stdio adapter. It generates a local key file if missing and signs requests without exposing the private key in tool arguments:
+## HTTP without an SDK
+
+Use this only when your HTTP tool can send POST requests, JSON and Authorization headers. This does not automatically install a ChatGPT connector or make a browsing-only chat able to call APIs.
+
+**Security trade-off:** the access key is the mailbox's Ed25519 private key, used as a bearer credential. The Worker sees it in memory on every convenience request. Application code does not save it to D1 or log it. That is a statement about the deployed implementation, not proof that a server or host cannot retain secrets. Your model provider, chat history, HTTP tool, proxy or infrastructure may retain it. Anyone who obtains it controls the inbox; it cannot be rotated while keeping this address. Prefer local signing for sensitive or long-lived inboxes. There is no end-to-end message encryption.
+
+1. POST ${env.API_ORIGIN}/v1/easy with Content-Type: application/json and this body (no Authorization header):
 
 ~~~json
-{"mcpServers":{"agent-temp-mail":{"command":"node","args":["/absolute/path/agent-temp-mail/sdk/mcp.mjs"],"env":{"MAIL_KEY_FILE":"/absolute/private/path/agent.key.json"}}}}
+{"tool":"create_inbox","arguments":{"persistent":true,"retention_seconds":604800}}
 ~~~
 
-The remote /mcp endpoint implements stateless Streamable HTTP JSON responses with initialize, ping, tools/list and tools/call. It supports protocol versions 2025-03-26, 2025-06-18 and 2025-11-25. Tool calls require the signed headers below. Generic remote MCP clients need a signing transport; this endpoint does not advertise OAuth support. Use the local adapter for compatibility. GET streaming and server sessions are not used.
+Omit the arguments or use persistent:false for a temporary inbox. The response contains result.address, result.expires_at, result.retention_seconds, public_key and **access_key**. Save the access_key in the tool host's private credential storage. It is returned only when a new identity is generated. Losing it loses access; there is no recovery.
+
+2. POST to the same endpoint with Authorization: Bearer YOUR_ACCESS_KEY and a tool request:
+
+~~~json
+{"tool":"list_messages","arguments":{}}
+~~~
+
+3. Read a message or candidates, extend/inspect the inbox, or delete it using the same endpoint and Authorization header:
+
+~~~json
+{"tool":"get_message","arguments":{"message_id":"MESSAGE_ID"}}
+~~~
+
+~~~json
+{"tool":"get_candidates","arguments":{"since":"2026-09-16T00:00:00Z","sender":"noreply@example.com"}}
+~~~
+
+Use your actual task's timestamp and expected sender. The address argument is optional; it defaults to the address derived from the credential. All eight tools below work with this envelope. Ordinary responses contain result and security, and do not echo the key. HTTP errors use the normal structured error format. Inspect result.persistent after changing lifetime. Reusing create_inbox with a credential keeps the existing inbox settings; extend_inbox changes them.
+
+Always use HTTPS directly. Never put a key in a URL, query string or public document. Convenience requests do not have signature replay protection: a copied key can be reused. Generated identities share bootstrap limits (5/hour/IP, 100/day). If a creation response is lost, its key cannot be recovered; retrying without a key creates another inbox. For robust retryable creation use the SDK with a locally saved key.
+
+## MCP
+
+Codex: create a durable private directory, then register the npm adapter:
+
+~~~sh
+mkdir -p "$HOME/.config/agent-temp-mail"
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail-mcp
+~~~
+
+For hosts accepting mcpServers JSON:
+
+~~~json
+{"mcpServers":{"agent-temp-mail":{"command":"npx","args":["--yes","--package=agent-temp-mail@0.2.0","agent-temp-mail-mcp"],"env":{"MAIL_KEY_FILE":"/absolute/private/durable/identity.key.json"}}}}
+~~~
+
+The parent directory must exist. The adapter generates a local key if absent. After first setup, MAIL_REQUIRE_EXISTING_KEY=1 makes a missing key an error. Call create_inbox to register before receiving mail. Use persistent:true to keep the address; use extend_inbox for an existing temporary address. Do not delete an inbox you intend to keep.
+
+Direct remote /mcp uses stateless Streamable HTTP JSON responses. Tool calls require fresh request signatures; static headers alone are insufficient. Use the local adapter when available. The HTTP convenience flow above is a REST tool interface, not an OAuth MCP connector.
 
 Tools: ${toolList.map((t) => t.name).join(", ")}.
 
 ## Authentication
 
-Every protected REST request and MCP tools/call request must carry:
+Every signed REST request and MCP tools/call request must carry (the explicitly separate /v1/easy flow uses its bearer credential instead):
 
 - X-Mail-Public-Key: the 52-character lowercase Base32 public key
 - X-Mail-Timestamp: current Unix time in whole seconds, within 60 seconds of server time
@@ -89,7 +136,7 @@ GET /v1/inboxes/ADDRESS/messages and /candidates accept:
 - since: inclusive ISO 8601 arrival timestamp with timezone
 - sender: exact From email address (case-insensitive match)
 
-Results are oldest first. Save the returned after cursor, including after an empty response, and use it to fetch newer messages. Keep filters unchanged while paging. If has_more is true, fetch the next page; otherwise wait at least poll_after_seconds. Back off further on repeated empty results. since uses server receipt time, not the sender's Date header. Sender matching does not authenticate the sender.
+Results are oldest first. Save the returned after cursor, including after an empty response, and use it to fetch newer messages. Keep filters unchanged while paging. If has_more is true, fetch the next page; otherwise wait at least poll_after_seconds. Back off further on repeated empty results. One inbox polling every 15 seconds all day would use 5,760 of the shared 6,000 daily calls. Poll briefly during active tasks and much less often while idle. The service does not wake your agent or schedule background checks. since uses server receipt time, not the sender's Date header. Sender matching does not authenticate the sender.
 
 GET /v1/inboxes/ADDRESS/messages/ID returns readable text and candidates. DELETE the same path deletes a single message. /candidates returns candidate numeric/alphanumeric OTPs and HTTP(S) links with source_message_id. Extraction is heuristic and may miss codes or include unrelated values. Review context and expected service. No URL is fetched by this service.
 
@@ -208,9 +255,9 @@ export function openapi(env: Env) {
     openapi: "3.1.0",
     info: {
       title: "Agent Temp Mail",
-      version: "0.1.0",
+      version: "0.2.0",
       description:
-        "Signed Ed25519 requests; public-key email addresses; no passwords or bearer tokens. See / for canonical signing, limits and retention semantics.",
+        "Local Ed25519 signing is recommended. Optional /v1/easy uses the private key as a server-processed bearer credential. See / for security trade-offs, limits and retention.",
     },
     servers: [{ url: env.API_ORIGIN }],
     paths: {
@@ -312,6 +359,52 @@ export function openapi(env: Env) {
           },
         },
       },
+      "/v1/easy": {
+        post: {
+          operationId: "easyToolCall",
+          summary:
+            "Run an inbox tool without client cryptography; server sees the bearer private key",
+          description:
+            "Omit Authorization only to create a new identity and inbox with create_inbox. Every other call requires Authorization: Bearer ACCESS_KEY. The access key is the mailbox private key; application code does not persist or log it. Your host may retain it. No key recovery or replay protection. Use the signed SDK for stronger isolation.",
+          security: [{ MailboxAccessKey: [] }, {}],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  oneOf: toolList.map((tool) =>
+                    obj(
+                      {
+                        tool: { const: tool.name },
+                        arguments: tool.inputSchema,
+                      },
+                      ["tool"],
+                    ),
+                  ),
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Tool result; credential is never echoed",
+              content: { "application/json": { schema: ref("EasyResult") } },
+            },
+            "201": {
+              description:
+                "New inbox and one-time credential response; preserve access_key privately",
+              content: { "application/json": { schema: ref("EasyCreation") } },
+            },
+            "400": error,
+            "401": error,
+            "403": error,
+            "404": error,
+            "410": error,
+            "429": error,
+            "503": error,
+          },
+        },
+      },
       "/health": {
         get: {
           operationId: "health",
@@ -335,7 +428,52 @@ export function openapi(env: Env) {
       },
     },
     components: {
+      securitySchemes: {
+        MailboxAccessKey: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "Ed25519 PKCS8 base64url",
+          description:
+            "Convenience mode only. This sends the private key to the Worker. Never put it in URLs.",
+        },
+      },
       schemas: {
+        EasySecurity: obj(
+          {
+            mode: { const: "server_processed_key" },
+            key_persisted_by_application: { const: false },
+            warning: str,
+          },
+          ["mode", "key_persisted_by_application", "warning"],
+        ),
+        EasyResult: obj(
+          {
+            result: {
+              anyOf: [
+                "Inbox",
+                "Deletion",
+                "Message",
+                "MessagePage",
+                "CandidatePage",
+              ].map(ref),
+            },
+            security: ref("EasySecurity"),
+          },
+          ["result", "security"],
+        ),
+        EasyCreation: obj(
+          {
+            result: ref("Inbox"),
+            access_key: {
+              type: "string",
+              description:
+                "Secret mailbox private key. Returned only during generation.",
+            },
+            public_key: str,
+            security: ref("EasySecurity"),
+          },
+          ["result", "access_key", "public_key", "security"],
+        ),
         Error: obj(
           {
             error: obj(

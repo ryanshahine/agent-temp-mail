@@ -371,3 +371,148 @@ describe("agent interfaces", () => {
     expect(Number(r.headers.get("Retry-After"))).toBeGreaterThan(0);
   });
 });
+
+describe("HTTP convenience mode", () => {
+  async function easy(tool, args = {}, key, options = {}) {
+    return fetchHandler(
+      new Request(
+        (options.origin || origin) + "/v1/easy" + (options.query || ""),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(key === undefined ? {} : { Authorization: `Bearer ${key}` }),
+            ...(options.headers || {}),
+          },
+          body: JSON.stringify({ tool, arguments: args }),
+        },
+      ),
+      env,
+    );
+  }
+  it("creates a persistent inbox, reads real parsed mail, and keeps the key out of storage and subsequent responses", async () => {
+    const response = await easy("create_inbox", {
+      persistent: true,
+      retention_seconds: 604800,
+    });
+    expect(response.status).toBe(201);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const created = await response.json();
+    expect(created.result.persistent).toBe(true);
+    expect(created.result.expires_at).toBe(null);
+    expect(created.security.key_persisted_by_application).toBe(false);
+    const key = created.access_key;
+    expect(key).toHaveLength(64);
+    const signed = client({
+      public_key: created.public_key,
+      private_key_pkcs8: key,
+    });
+    expect((await signed.inspect()).address).toBe(created.result.address);
+    expect(await deliver(created.result.address)).toBeUndefined();
+    const page = await (await easy("list_messages", {}, key)).json();
+    expect(page.result.messages).toHaveLength(1);
+    expect(JSON.stringify(page)).not.toContain(key);
+    const read = await (
+      await easy("get_message", { message_id: page.result.messages[0].id }, key)
+    ).json();
+    expect(read.result.text).toContain("123456");
+    expect(read.result.untrusted).toBe(true);
+    for (const table of ["inboxes", "messages", "limits", "nonces", "usage"]) {
+      expect(
+        JSON.stringify(await env.DB.prepare(`SELECT * FROM ${table}`).all()),
+      ).not.toContain(key);
+    }
+    const deleted = await (await easy("delete_inbox", {}, key)).json();
+    expect(deleted.result.deleted).toBe(true);
+    expect((await easy("inspect_inbox", {}, key)).status).toBe(404);
+  });
+  it("isolates owners and rejects malformed, missing and cross-origin credentials without echoing them", async () => {
+    const a = client(),
+      b = client();
+    await a.create();
+    await b.create();
+    expect(
+      (
+        await easy(
+          "list_messages",
+          { address: a.address },
+          b.identity.private_key_pkcs8,
+        )
+      ).status,
+    ).toBe(403);
+    expect((await easy("list_messages")).status).toBe(401);
+    const bad = "A".repeat(64);
+    const invalid = await easy("create_inbox", {}, bad);
+    expect(invalid.status).toBe(401);
+    expect(await invalid.text()).not.toContain(bad);
+    expect(
+      (
+        await easy("list_messages", {}, a.identity.private_key_pkcs8, {
+          headers: { Origin: "https://other.example" },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await easy("list_messages", {}, a.identity.private_key_pkcs8, {
+          query: "?access_key=do-not-put-secrets-in-urls",
+        })
+      ).status,
+    ).toBe(400);
+    const insecure = await easy(
+      "list_messages",
+      {},
+      a.identity.private_key_pkcs8,
+      { origin: "http://agent-temp-mail.com" },
+    );
+    expect(insecure.status).toBe(400);
+    expect(insecure.headers.get("Location")).toBeNull();
+    expect(
+      (await easy("unknown_tool", {}, a.identity.private_key_pkcs8)).status,
+    ).toBe(400);
+    expect(
+      (await easy("list_messages", [], a.identity.private_key_pkcs8)).status,
+    ).toBe(400);
+  });
+  it("preserves existing create settings, extends to persistent, and shares owner limits with signed requests", async () => {
+    const a = client();
+    await a.create();
+    const again = await (
+      await easy(
+        "create_inbox",
+        { persistent: true },
+        a.identity.private_key_pkcs8,
+      )
+    ).json();
+    expect(again.result.persistent).toBe(false);
+    expect(again.access_key).toBeUndefined();
+    const extended = await (
+      await easy(
+        "extend_inbox",
+        { persistent: true },
+        a.identity.private_key_pkcs8,
+      )
+    ).json();
+    expect(extended.result.persistent).toBe(true);
+    for (let i = 0; i < 27; i++)
+      expect(
+        (await easy("inspect_inbox", {}, a.identity.private_key_pkcs8)).status,
+      ).toBe(200);
+    await expect(a.inspect()).rejects.toMatchObject({ status: 429 });
+  });
+  it("limits generated identities and documents every convenience tool", async () => {
+    for (let i = 0; i < 5; i++)
+      expect((await easy("create_inbox")).status).toBe(201);
+    expect((await easy("create_inbox")).status).toBe(429);
+    const spec = await (
+      await fetchHandler(new Request(origin + "/openapi.json"), env)
+    ).json();
+    expect(
+      spec.paths["/v1/easy"].post.requestBody.content["application/json"].schema
+        .oneOf,
+    ).toHaveLength(8);
+    expect(spec.components.securitySchemes.MailboxAccessKey.scheme).toBe(
+      "bearer",
+    );
+  });
+});
