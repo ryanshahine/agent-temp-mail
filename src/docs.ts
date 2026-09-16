@@ -8,6 +8,7 @@ Temporary, programmatic email infrastructure for AI agents.
 Base URL: ${env.API_ORIGIN}
 OpenAPI: ${env.API_ORIGIN}/openapi.json
 Remote MCP: ${env.API_ORIGIN}/mcp
+Client integration guide: ${env.API_ORIGIN}/integrations.md
 Source and local signing SDK: https://github.com/ryanshahine/agent-temp-mail
 Contact: hi@${env.DOMAIN}
 Questions and feedback: feedback@${env.DOMAIN}

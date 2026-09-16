@@ -30,6 +30,7 @@ import {
 } from "./service";
 import { toolList, invoke } from "./mcp";
 import { markdown, openapi } from "./docs";
+import { integrations } from "./integrations";
 async function bootstrap(
   body: Record<string, unknown>,
   env: Env,
@@ -213,6 +214,24 @@ export async function fetchHandler(req: Request, env: Env): Promise<Response> {
           "X-Content-Type-Options": "nosniff",
         },
       });
+    if (req.method === "GET" && url.pathname === "/integrations.md")
+      return new Response(integrations, {
+        headers: {
+          "Content-Type": "text/markdown; charset=utf-8",
+          "Cache-Control": "public,max-age=300",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    if (req.method === "GET" && url.pathname === "/robots.txt")
+      return new Response(
+        "User-agent: *\nAllow: /\nDisallow: /v1/\nDisallow: /mcp\n",
+        {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "public,max-age=3600",
+          },
+        },
+      );
     if (req.method === "GET" && url.pathname === "/openapi.json")
       return json(openapi(env), 200, { "Cache-Control": "public,max-age=300" });
     if (req.method === "GET" && url.pathname === "/health")

@@ -14,5 +14,9 @@ export default defineConfig({
       },
     })),
   ],
-  test: { setupFiles: ["./test/setup.ts"], fileParallelism: false },
+  test: {
+    exclude: ["**/node_modules/**", "**/.git/**", "**/*.node.test.mjs"],
+    setupFiles: ["./test/setup.ts"],
+    fileParallelism: false,
+  },
 });

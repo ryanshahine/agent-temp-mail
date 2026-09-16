@@ -26,8 +26,8 @@
   "account_id": "2aafe2f9740540f8bb26ed21a78abc95",
   "routes": [
     {
-      "pattern": "agent-temp-mail.com",
-      "custom_domain": true
+      "pattern": "agent-temp-mail.com/*",
+      "zone_name": "agent-temp-mail.com"
     }
   ]
 }

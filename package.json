@@ -8,13 +8,14 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test",
+    "check": "npm run typecheck && npm test && npm run test:sdk",
     "db:local": "wrangler d1 migrations apply agent-temp-mail --local",
     "db:remote": "node scripts/migrate-remote.mjs",
     "mcp": "node sdk/mcp.mjs",
     "keygen": "node sdk/cli.mjs keygen",
     "format": "prettier --write src sdk test scripts *.json *.jsonc *.ts *.md .github/workflows/*.yml",
-    "format:check": "prettier --check src sdk test scripts *.json *.jsonc *.ts *.md .github/workflows/*.yml"
+    "format:check": "prettier --check src sdk test scripts *.json *.jsonc *.ts *.md .github/workflows/*.yml",
+    "test:sdk": "node --test test/sdk.node.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",

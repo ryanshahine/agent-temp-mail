@@ -78,6 +78,12 @@ The adapter creates the key file if absent and signs calls locally. Secrets are 
 
 Direct HTTP MCP uses request signatures, not OAuth. Use the local adapter when the MCP host cannot install a signing transport. The server supports stateless JSON responses; it does not hold an SSE connection or server-side session.
 
+## Other agents and model providers
+
+See [the integration guide](https://agent-temp-mail.com/integrations.md) for Claude, Cursor and Grok connection options. Claude Code/Desktop, Cursor, and Grok Build can use the local stdio adapter when their host permits local MCP. API-based agents can use `sdk/tools.mjs` to execute signed function calls in the host application; it exports MCP, Anthropic, Chat Completions and Responses tool formats.
+
+Hosted remote connectors with static headers cannot sign each request and are not directly supported. Do not send private keys to a model provider or put them in tool arguments. There is no model or user-agent allowlist. Public crawler access is distinct from authenticated mailbox ownership.
+
 ## Signing protocol
 
 See [the live Markdown instructions](https://agent-temp-mail.com/) for the complete API. Headers:
@@ -147,11 +153,13 @@ Set `MAIL_BASE_URL=http://localhost:8787` for the CLI. `MAIL_DOMAIN` controls th
 
 1. Authenticate `wrangler login` to a **Workers Free** account.
 2. Create D1: `npx wrangler d1 create agent-temp-mail --jurisdiction eu`.
-3. Set the D1 ID, account ID, custom domain and `DOMAIN`/`API_ORIGIN` in `wrangler.jsonc`.
+3. Set the D1 ID, account ID, domain route and `DOMAIN`/`API_ORIGIN` in `wrangler.jsonc`.
 4. Generate a separate administrator key outside the repository; set only its Base32 public key in `ADMIN_PUBLIC_KEY`.
 5. Run `npm run check`, `npm run db:remote`, and `npm run deploy`.
 6. Run `node scripts/contact-sql.mjs` to generate contact provisioning SQL and apply it with `wrangler d1 execute --remote --file=...`.
 7. Enable Email Routing DNS for the domain and configure its catch-all action to send to Worker `agent-temp-mail`.
+
+The deployed configuration uses a Worker route over existing proxied DNS records. For a new domain, configure a proxied DNS record first, or use a Worker custom domain when no conflicting records exist.
 
 Do not replace existing MX records without checking existing mail service. A custom HTTP domain alone does not configure email receipt. No secret belongs in `wrangler.jsonc`, Git history, workflow logs or command arguments.
 
