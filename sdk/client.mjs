@@ -141,11 +141,18 @@ export function signedToolArguments(
     nonce = randomBytes(18).toString("base64url"),
   } = {},
 ) {
+  const normalized = JSON.parse(JSON.stringify(args));
+  if (
+    !normalized ||
+    typeof normalized !== "object" ||
+    Array.isArray(normalized)
+  )
+    throw new TypeError("Tool arguments must be a JSON object.");
   const canonical = [
     "agent-temp-mail:mcp:v1",
     new URL(origin).origin,
     name,
-    createHash("sha256").update(stableJson(args)).digest("base64url"),
+    createHash("sha256").update(stableJson(normalized)).digest("base64url"),
     timestamp,
     nonce,
   ].join("\n");
@@ -155,7 +162,7 @@ export function signedToolArguments(
     format: "der",
   });
   return {
-    ...args,
+    ...normalized,
     _auth: {
       public_key: identity.public_key,
       timestamp,

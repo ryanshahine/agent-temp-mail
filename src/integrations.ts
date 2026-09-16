@@ -23,7 +23,7 @@ Node.js 22.12+:
   "mcpServers": {
     "agent-temp-mail": {
       "command": "npx",
-      "args": ["--yes", "--package=agent-temp-mail@0.3.0", "agent-temp-mail-mcp"],
+      "args": ["--yes", "--package=agent-temp-mail@0.3.1", "agent-temp-mail-mcp"],
       "env": {"MAIL_KEY_FILE": "/absolute/private/path/agent.key.json"}
     }
   }
@@ -36,13 +36,13 @@ Codex:
 
 ~~~sh
 mkdir -p "$HOME/.config/agent-temp-mail"
-codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail-mcp
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
 ~~~
 
 Claude Code:
 
 ~~~sh
-claude mcp add --transport stdio --env MAIL_KEY_FILE=/absolute/private/path/agent.key.json agent-temp-mail -- npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail-mcp
+claude mcp add --transport stdio --env MAIL_KEY_FILE=/absolute/private/path/agent.key.json agent-temp-mail -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
 ~~~
 
 ## Hosted remote MCP

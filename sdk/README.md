@@ -88,7 +88,7 @@ Supply `args` to the `list_messages` tool exposed by `https://agent-temp-mail.co
       "command": "npx",
       "args": [
         "--yes",
-        "--package=agent-temp-mail@0.3.0",
+        "--package=agent-temp-mail@0.3.1",
         "agent-temp-mail-mcp"
       ],
       "env": { "MAIL_KEY_FILE": "/absolute/private/mail.key.json" }
@@ -115,11 +115,11 @@ Tools:
 export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
 mkdir -p "$(dirname "$MAIL_KEY_FILE")"
 
-npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail keygen
-npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail inspect
-npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail list '{"since":"2026-09-16T12:00:00Z"}'
-npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail configure '{"retention_seconds":604800}'
-npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail purge
+npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail keygen
+npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail inspect
+npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail list '{"since":"2026-09-16T12:00:00Z"}'
+npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail configure '{"retention_seconds":604800}'
+npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail purge
 ```
 
 `keygen` only creates the local key file and prints the immediately usable address.

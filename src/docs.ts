@@ -45,7 +45,7 @@ Private key files are created with mode 0600. Keep them outside repositories and
 
 ~~~sh
 mkdir -p "$HOME/.config/agent-temp-mail"
-codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail-mcp
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
 ~~~
 
 The local adapter generates the key file if absent, signs outside model context and exposes these tools:
@@ -270,7 +270,7 @@ export function openapi(env: Env) {
     openapi: "3.1.0",
     info: {
       title: "Agent Temp Mail",
-      version: "0.3.0",
+      version: "0.3.1",
       description:
         "Key-derived addresses receive immediately without registration. Ed25519 signatures authorize private reads and mutations.",
     },

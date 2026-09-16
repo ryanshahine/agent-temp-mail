@@ -88,8 +88,12 @@ test("signed URLs and hosted MCP proofs never contain the private key", () => {
   );
   assert.match(url, /mail_signature=/);
   assert.ok(!url.includes(identity.private_key_pkcs8));
-  const args = signedToolArguments(identity, "list_messages", { limit: 1 });
+  const args = signedToolArguments(identity, "list_messages", {
+    limit: 1,
+    omitted: undefined,
+  });
   assert.equal(args._auth.public_key, identity.public_key);
+  assert.equal("omitted" in args, false);
   assert.ok(args._auth.signature);
   assert.ok(!JSON.stringify(args).includes(identity.private_key_pkcs8));
 });

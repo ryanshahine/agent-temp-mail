@@ -53,7 +53,7 @@ Private key files use mode `0600`. Keep them outside repositories and model cont
 
 ```sh
 mkdir -p "$HOME/.config/agent-temp-mail"
-codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail-mcp
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
 ```
 
 The adapter holds and uses the private key locally. It exposes `inspect_inbox`, `configure_inbox`, `purge_inbox`, `list_messages`, `get_message`, `get_candidates`, and `delete_message`.

@@ -32,7 +32,7 @@ async function rpc(method, params) {
   return response.result;
 }
 const server = new Server(
-  { name: "agent-temp-mail", version: "0.3.0" },
+  { name: "agent-temp-mail", version: "0.3.1" },
   { capabilities: { tools: {} } },
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => {
