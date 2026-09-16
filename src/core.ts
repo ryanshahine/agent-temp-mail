@@ -204,21 +204,21 @@ export async function limit(
       (bucket + 1) * window - t,
     );
 }
-export async function authenticate(
-  req: Request,
-  raw: Uint8Array,
+const queryAuth = {
+  owner: "mail_public_key",
+  timestamp: "mail_timestamp",
+  nonce: "mail_nonce",
+  signature: "mail_signature",
+} as const;
+
+async function verifyProof(
+  owner: string,
+  timestamp: string,
+  nonce: string,
+  sig: string,
+  canonical: string,
   env: Env,
-): Promise<string> {
-  const owner = req.headers.get("X-Mail-Public-Key") || "",
-    timestamp = req.headers.get("X-Mail-Timestamp") || "",
-    nonce = req.headers.get("X-Mail-Nonce") || "",
-    sig = req.headers.get("X-Mail-Signature") || "";
-  if (!owner || !timestamp || !nonce || !sig)
-    throw new Fault(
-      401,
-      "signature_required",
-      "Sign this request with your mailbox private key. See /#authentication.",
-    );
+) {
   const pub = unbase32(owner);
   if (!/^\d{10}$/.test(timestamp) || Math.abs(now() - Number(timestamp)) > 60)
     throw new Fault(
@@ -232,16 +232,6 @@ export async function authenticate(
       "invalid_nonce",
       "Nonce must be 22–64 base64url characters; use 16 or more random bytes.",
     );
-  const url = new URL(req.url);
-  const canonical = [
-    "agent-temp-mail:v1",
-    url.origin,
-    req.method.toUpperCase(),
-    url.pathname + url.search,
-    await digest(raw),
-    timestamp,
-    nonce,
-  ].join("\n");
   let valid = false;
   try {
     const key = await crypto.subtle.importKey(
@@ -274,6 +264,114 @@ export async function authenticate(
     );
   return owner;
 }
+
+export async function authenticate(
+  req: Request,
+  raw: Uint8Array,
+  env: Env,
+): Promise<string> {
+  const url = new URL(req.url);
+  const headerValues = [
+    req.headers.get("X-Mail-Public-Key"),
+    req.headers.get("X-Mail-Timestamp"),
+    req.headers.get("X-Mail-Nonce"),
+    req.headers.get("X-Mail-Signature"),
+  ];
+  const hasHeaders = headerValues.some(Boolean);
+  const queryValues = Object.values(queryAuth).map((name) =>
+    url.searchParams.get(name),
+  );
+  const hasQuery = queryValues.some(Boolean);
+  if (hasHeaders && hasQuery)
+    throw new Fault(
+      400,
+      "mixed_authentication",
+      "Use either signed headers or a signed GET URL, not both.",
+    );
+  if (hasQuery && req.method !== "GET")
+    throw new Fault(
+      400,
+      "query_auth_get_only",
+      "Signed URL authentication is available only for read-only GET requests.",
+    );
+  for (const name of Object.values(queryAuth))
+    if (url.searchParams.getAll(name).length > 1)
+      throw new Fault(
+        400,
+        "invalid_authentication",
+        "Duplicate authentication parameter.",
+      );
+  const [owner, timestamp, nonce, sig] = (
+    hasQuery ? queryValues : headerValues
+  ).map((value) => value || "");
+  if (!owner || !timestamp || !nonce || !sig)
+    throw new Fault(
+      401,
+      "signature_required",
+      "Sign this request with your mailbox private key. See /#authentication.",
+    );
+  if (hasQuery)
+    for (const name of Object.values(queryAuth)) url.searchParams.delete(name);
+  const canonical = [
+    "agent-temp-mail:v1",
+    url.origin,
+    req.method.toUpperCase(),
+    url.pathname + url.search,
+    await digest(raw),
+    timestamp,
+    nonce,
+  ].join("\n");
+  return verifyProof(owner, timestamp, nonce, sig, canonical, env);
+}
+
+export function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.keys(value as Record<string, unknown>)
+    .sort()
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`,
+    )
+    .join(",")}}`;
+}
+
+export async function authenticateTool(
+  name: string,
+  args: Record<string, unknown>,
+  auth: unknown,
+  env: Env,
+) {
+  if (!auth || typeof auth !== "object" || Array.isArray(auth))
+    throw new Fault(
+      401,
+      "signature_required",
+      "Provide _auth with a fresh Ed25519 tool signature.",
+    );
+  const a = auth as Record<string, unknown>;
+  only(a, ["public_key", "timestamp", "nonce", "signature"]);
+  const owner = typeof a.public_key === "string" ? a.public_key : "";
+  const timestamp = typeof a.timestamp === "string" ? a.timestamp : "";
+  const nonce = typeof a.nonce === "string" ? a.nonce : "";
+  const sig = typeof a.signature === "string" ? a.signature : "";
+  if (!owner || !timestamp || !nonce || !sig)
+    throw new Fault(
+      401,
+      "signature_required",
+      "_auth requires public_key, timestamp, nonce and signature.",
+    );
+  const canonical = [
+    "agent-temp-mail:mcp:v1",
+    env.API_ORIGIN,
+    name,
+    await digest(stableJson(args)),
+    timestamp,
+    nonce,
+  ].join("\n");
+  return verifyProof(owner, timestamp, nonce, sig, canonical, env);
+}
+
+export const signedQueryParameters = new Set<string>(Object.values(queryAuth));
 export function ownerAddress(owner: string, env: Env) {
   return `${owner}@${env.DOMAIN}`;
 }

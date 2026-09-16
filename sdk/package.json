@@ -1,7 +1,7 @@
 {
   "name": "agent-temp-mail",
-  "version": "0.2.0",
-  "description": "Temporary and persistent inboxes for AI agents: signed email SDK, CLI and MCP server",
+  "version": "0.3.0",
+  "description": "Key-derived email inboxes for AI agents: signed SDK, CLI and MCP server",
   "type": "module",
   "main": "./index.mjs",
   "types": "./index.d.mts",

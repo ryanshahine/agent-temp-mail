@@ -3,6 +3,8 @@ export {
   validateIdentity,
   loadIdentity,
   signedHeaders,
+  signedUrl,
+  signedToolArguments,
   base32,
   MailClient,
 } from "./client.mjs";

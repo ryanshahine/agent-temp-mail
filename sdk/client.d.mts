@@ -15,9 +15,11 @@ export interface Filters {
 }
 export interface Inbox {
   address: string;
-  created_at: string;
+  created_at: string | null;
   expires_at: string | null;
   persistent: boolean;
+  accepting_mail: boolean;
+  storage_initialized: boolean;
   retention_seconds: number;
   stored_message_count: number;
   stored_bytes: number;
@@ -79,6 +81,24 @@ export function signedHeaders(
   body?: string,
   options?: { timestamp?: string; nonce?: string },
 ): Record<string, string>;
+export function signedUrl(
+  identity: Identity,
+  url: string,
+  options?: { timestamp?: string; nonce?: string },
+): string;
+export function signedToolArguments<T extends Record<string, unknown>>(
+  identity: Identity,
+  name: string,
+  args?: T,
+  options?: { origin?: string; timestamp?: string; nonce?: string },
+): T & {
+  _auth: {
+    public_key: string;
+    timestamp: string;
+    nonce: string;
+    signature: string;
+  };
+};
 export class MailClient {
   constructor(
     identity: Identity,
@@ -94,9 +114,12 @@ export class MailClient {
   ): Promise<T>;
   box(address?: string): string;
   create(options?: InboxOptions): Promise<Inbox>;
+  configure(options?: Pick<InboxOptions, "retention_seconds">): Promise<Inbox>;
   inspect(address?: string): Promise<Inbox>;
   extend(options?: InboxOptions, address?: string): Promise<Inbox>;
   deleteInbox(address?: string): Promise<Deletion>;
+  purge(address?: string): Promise<Deletion>;
+  signedUrl(path: string): string;
   list(filters?: Filters, address?: string): Promise<Page>;
   candidates(
     filters?: Filters,

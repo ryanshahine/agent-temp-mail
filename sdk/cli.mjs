@@ -6,7 +6,7 @@ const path =
   args.find((a) => a.startsWith("--key="))?.slice(6);
 if (!path) {
   console.error(
-    "Set MAIL_KEY_FILE to a private file path (or --key=/path/identity.key.json). Commands: keygen, create, inspect, list, candidates, get ID, delete-message ID, extend, delete-inbox. Optional JSON arguments for create/list/candidates/extend.",
+    "Set MAIL_KEY_FILE to a private file path (or --key=/path/identity.key.json). Commands: keygen, inspect, configure, list, candidates, get ID, delete-message ID, purge. Optional JSON arguments for configure/list/candidates. Legacy aliases: create, extend, delete-inbox.",
   );
   process.exit(1);
 }
@@ -29,6 +29,9 @@ try {
     case "create":
       result = await client.create(JSON.parse(values[0] || "{}"));
       break;
+    case "configure":
+      result = await client.configure(JSON.parse(values[0] || "{}"));
+      break;
     case "inspect":
       result = await client.inspect(values[0]);
       break;
@@ -49,6 +52,9 @@ try {
       break;
     case "delete-inbox":
       result = await client.deleteInbox();
+      break;
+    case "purge":
+      result = await client.purge();
       break;
     default:
       throw new Error("Unknown command.");

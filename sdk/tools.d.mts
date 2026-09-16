@@ -1,9 +1,7 @@
 import type { MailClient } from "./client.mjs";
 export class AgentMailTools {
   constructor(mailClient: MailClient);
-  definitions(
-    format?: "mcp",
-  ): Promise<
+  definitions(format?: "mcp"): Promise<
     Array<{
       name: string;
       description: string;

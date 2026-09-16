@@ -32,12 +32,31 @@ async function rpc(method, params) {
   return response.result;
 }
 const server = new Server(
-  { name: "agent-temp-mail", version: "0.2.0" },
+  { name: "agent-temp-mail", version: "0.3.0" },
   { capabilities: { tools: {} } },
 );
-server.setRequestHandler(ListToolsRequestSchema, async () =>
-  rpc("tools/list", {}),
-);
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const result = await rpc("tools/list", {});
+  return {
+    tools: result.tools.map((tool) => {
+      const { _auth, ...properties } = tool.inputSchema.properties;
+      return {
+        ...tool,
+        description: tool.description.replace(
+          " Hosted connectors must include _auth; local MCP adapters add authentication automatically.",
+          "",
+        ),
+        inputSchema: {
+          ...tool.inputSchema,
+          properties,
+          required: (tool.inputSchema.required ?? []).filter(
+            (name) => name !== "_auth",
+          ),
+        },
+      };
+    }),
+  };
+});
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     return await rpc("tools/call", request.params);

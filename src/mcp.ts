@@ -1,6 +1,6 @@
 import { Env, Fault, ownerAddress } from "./core";
 import {
-  create,
+  configure,
   extend,
   remove,
   inbox,
@@ -9,28 +9,19 @@ import {
   getMessage,
   deleteMessage,
 } from "./service";
+
 const address = {
   type: "string",
   description:
-    "Mailbox address. Defaults to the address derived from your signing key.",
+    "Mailbox address. Defaults to the permanent address derived from the signing public key.",
 };
-const lifecycle = {
-  persistent: {
-    type: "boolean",
-    description: "Keep the address until deleted; messages still expire.",
-  },
-  ttl_seconds: {
-    type: "integer",
-    minimum: 3600,
-    maximum: 604800,
-    description:
-      "Disposable inbox lifetime from now. Do not combine with persistent:true.",
-  },
+const retention = {
   retention_seconds: {
     type: "integer",
     minimum: 3600,
     maximum: 604800,
-    description: "Lifetime of newly received messages. Default 86400.",
+    description:
+      "Lifetime of newly received messages. Default 86400 (24 hours). The address itself does not expire.",
   },
 };
 const filters = {
@@ -50,6 +41,20 @@ const filters = {
     description: "Exact From email address; not proof of authenticity.",
   },
 };
+const auth = {
+  type: "object",
+  description:
+    "Fresh Ed25519 proof generated locally with signedToolArguments(). The private key is never included.",
+  properties: {
+    public_key: { type: "string", pattern: "^[a-z2-7]{52}$" },
+    timestamp: { type: "string", pattern: "^[0-9]{10}$" },
+    nonce: { type: "string", minLength: 22, maxLength: 64 },
+    signature: { type: "string" },
+  },
+  required: ["public_key", "timestamp", "nonce", "signature"],
+  additionalProperties: false,
+};
+
 function tool(
   name: string,
   description: string,
@@ -68,35 +73,29 @@ function tool(
     },
     annotations: {
       readOnlyHint,
-      destructiveHint: name.startsWith("delete"),
+      destructiveHint: name.startsWith("delete") || name.startsWith("purge"),
       idempotentHint: true,
       openWorldHint: false,
     },
   };
 }
+
 export const toolList = [
   tool(
-    "create_inbox",
-    "Register the address derived from your public key. Existing active inbox is returned unchanged.",
-    lifecycle,
-    [],
-    false,
-  ),
-  tool(
     "inspect_inbox",
-    "Get inbox lifetime, message retention and storage usage.",
+    "Inspect the permanent public-key address, message retention and current storage. Works before the first email arrives.",
     { address },
   ),
   tool(
-    "extend_inbox",
-    "Extend inbox expiry or make it persistent. Retention changes affect future mail.",
-    { address, ...lifecycle },
+    "configure_inbox",
+    "Set bounded retention for newly received messages. The public-key address itself always remains valid.",
+    { ...retention },
     [],
     false,
   ),
   tool(
-    "delete_inbox",
-    "Delete an inbox and its messages. Only the same key can recreate its address.",
+    "purge_inbox",
+    "Delete stored messages and custom settings. Future email can initialize this permanent public-key address again.",
     { address },
     [],
     false,
@@ -125,20 +124,42 @@ export const toolList = [
     false,
   ),
 ];
+
+export const remoteToolList = toolList.map((item) => ({
+  ...item,
+  description: `${item.description} Hosted connectors must include _auth; local MCP adapters add authentication automatically.`,
+  inputSchema: {
+    ...item.inputSchema,
+    properties: { ...item.inputSchema.properties, _auth: auth },
+    required: [...item.inputSchema.required, "_auth"],
+  },
+}));
+
+const aliases: Record<string, string> = {
+  create_inbox: "configure_inbox",
+  extend_inbox: "configure_inbox",
+  delete_inbox: "purge_inbox",
+};
+
 export async function invoke(
-  name: string,
+  requestedName: string,
   args: Record<string, unknown>,
   env: Env,
   owner: string,
 ) {
+  const name = aliases[requestedName] ?? requestedName;
   const descriptor = toolList.find((t) => t.name === name);
   if (!descriptor) throw new Fault(400, "unknown_tool", "Unknown MCP tool.");
+  const legacyFields = ["persistent", "ttl_seconds"];
   for (const key of Object.keys(args))
-    if (!(key in descriptor.inputSchema.properties))
+    if (
+      !(key in descriptor.inputSchema.properties) &&
+      !(requestedName in aliases && legacyFields.includes(key))
+    )
       throw new Fault(400, "unknown_field", `Unknown argument: ${key}`);
   const { address: provided, message_id, ...rest } = args;
-  const address = provided === undefined ? ownerAddress(owner, env) : provided;
-  if (typeof address !== "string")
+  const target = provided === undefined ? ownerAddress(owner, env) : provided;
+  if (typeof target !== "string")
     throw new Fault(400, "invalid_parameter", "address must be a string.");
   if (
     ["get_message", "delete_message"].includes(name) &&
@@ -146,21 +167,21 @@ export async function invoke(
   )
     throw new Fault(400, "invalid_parameter", "message_id is required.");
   switch (name) {
-    case "create_inbox":
-      return create(env, owner, rest);
     case "inspect_inbox":
-      return describe(await inbox(env, address, owner));
-    case "extend_inbox":
-      return extend(env, address, owner, rest);
-    case "delete_inbox":
-      return remove(env, address, owner);
+      return describe(await inbox(env, target, owner));
+    case "configure_inbox":
+      return requestedName === "extend_inbox"
+        ? extend(env, target, owner, rest)
+        : configure(env, owner, rest);
+    case "purge_inbox":
+      return remove(env, target, owner);
     case "list_messages":
-      return list(env, address, owner, rest);
+      return list(env, target, owner, rest);
     case "get_candidates":
-      return list(env, address, owner, rest, true);
+      return list(env, target, owner, rest, true);
     case "get_message":
-      return getMessage(env, address, owner, message_id as string);
+      return getMessage(env, target, owner, message_id as string);
     case "delete_message":
-      return deleteMessage(env, address, owner, message_id as string);
+      return deleteMessage(env, target, owner, message_id as string);
   }
 }

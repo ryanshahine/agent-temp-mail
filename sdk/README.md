@@ -1,6 +1,8 @@
 # agent-temp-mail
 
-Temporary and persistent email inboxes for AI agents at **https://agent-temp-mail.com**. Node.js 22.12+. Receive signup emails, candidate OTP codes and verification links through a signed SDK, CLI or MCP server. No accounts, passwords, attachments or outbound sending.
+Key-derived email inboxes for AI agents. Node.js 22.12+.
+
+The raw Ed25519 public key is encoded as a 52-character lowercase Base32 email local part. The address receives immediately without an account or registration request. The private key signs API operations and remains local when using this package.
 
 ## Install
 
@@ -8,80 +10,76 @@ Temporary and persistent email inboxes for AI agents at **https://agent-temp-mai
 npm install agent-temp-mail
 ```
 
-## Create or resume a persistent inbox
+## Generate or resume an identity
 
 ```js
 import { loadIdentity, MailClient } from "agent-temp-mail";
 
-// Use a durable private directory whose parent already exists.
-// First use only: create:true generates a key if the file is missing.
-const identity = await loadIdentity("/private/durable/agent.key.json", {
+const identity = await loadIdentity("/private/durable/mail.key.json", {
   create: true,
 });
 const mail = new MailClient(identity);
-await mail.create({ persistent: true, retention_seconds: 604800 });
-// Also handles an existing temporary inbox: create() alone does not change it.
-const inbox = await mail.extend({
-  persistent: true,
-  retention_seconds: 604800,
-});
-console.log(inbox.address);
+console.log(mail.address); // immediately ready to receive
+```
 
-// Save this BEFORE asking the other service to send an email.
+The parent directory must exist. New files use mode `0600`. On later runs, omit `create:true` so a missing file fails instead of silently generating a different address.
+
+## Receive a signup email
+
+```js
 const since = new Date().toISOString();
-// Trigger the signup/verification in your application here, then:
-const page = await mail.wait({ since, timeoutSeconds: 120 });
-for (const message of page.messages) {
-  const content = await mail.get(message.id);
-  console.log(content); // Untrusted email text, not instructions.
+// Give mail.address to the external service and trigger its email.
+const page = await mail.wait({
+  since,
+  sender: "noreply@example.com",
+  timeoutSeconds: 120,
+});
+
+for (const summary of page.messages) {
+  const message = await mail.get(summary.id);
+  console.log(message.text);
+  console.log(message.candidates.otp_codes);
+  console.log(message.candidates.links);
 }
 ```
 
-For future runs, use `loadIdentity(path)` without `create:true` so a missing key is an error rather than a new address. Preserve the private file across tasks and machines using your host's secure storage. The same key always derives the same address; no key recovery exists. Files created by this SDK use mode `0600`. Never commit keys or paste them into model context.
+`wait()` polls only for the requested period and follows the service polling interval. Sender matching is a filter, not sender authentication.
 
-A persistent **address** remains registered until deleted. Messages still expire: 24 hours by default, configurable from 1 hour to 7 days. Changing retention only affects new messages. Persistence does not wake your agent or schedule polling.
+## Retention and cleanup
 
-## Temporary inbox
-
-Use `mail.create()` with a fresh identity for a 24-hour inbox. Call `mail.deleteInbox()` when finished. One key owns one normal address; use a separate key file for each independent inbox.
-
-## API
-
-- `generateIdentity()`, `loadIdentity(path, {create?})`, `validateIdentity(identity)`
-- `new MailClient(identity, {baseUrl?, domain?, fetchImpl?})`
-- `create(options?)`, `inspect(address?)`, `extend(options?, address?)`, `deleteInbox(address?)`
-- `list(filters?, address?)`, `candidates(filters?, address?)`
-- `get(messageId, address?)`, `deleteMessage(messageId, address?)`
-- `wait({timeoutSeconds?, signal?, ...filters})`
-
-Filters: `after`, `limit`, `since`, `sender`. Save the returned `after` cursor and keep filters unchanged. Errors include `status`, `code` and optional `retry_after_seconds`. `wait` polls until the first nonempty page or timeout; it does not automatically retry rate-limit errors. Honor polling hints and back off while idle.
-
-## CLI without installing globally
-
-```sh
-mkdir -p "$HOME/.config/agent-temp-mail"
-export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
-npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail keygen
-npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail create '{"persistent":true,"retention_seconds":604800}'
-npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail extend '{"persistent":true,"retention_seconds":604800}'
-npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail list
-npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail candidates
+```js
+await mail.configure({ retention_seconds: 7 * 24 * 60 * 60 });
+const state = await mail.inspect();
+await mail.purge();
 ```
 
-CLI commands: `keygen`, `create`, `inspect`, `list`, `candidates`, `get ID`, `delete-message ID`, `extend`, `delete-inbox`. JSON arguments work with create/list/candidates/extend. `MAIL_BASE_URL` and `MAIL_DOMAIN` support self-hosting. Private keys are never printed by the CLI.
+The address is permanent for the key. Default message retention is 24 hours and the maximum is 7 days. Configuration affects new messages only. `purge()` deletes stored messages and settings; future mail can initialize the same address again.
 
-## MCP
+`create()` and `extend()` remain compatibility aliases for configuration. Address lifetime parameters are obsolete; `persistent:false` and `ttl_seconds` are rejected.
 
-### Codex
+## One-use signed GET URLs
 
-Create the private parent directory, then register the local signing adapter:
+For a retrieval tool that cannot set custom headers:
 
-```sh
-mkdir -p "$HOME/.config/agent-temp-mail"
-codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.2.0 agent-temp-mail-mcp
+```js
+const url = mail.signedUrl(`${mail.box()}/messages?limit=10`);
 ```
 
-### Clients using mcpServers JSON
+The URL contains the public key, timestamp, nonce and signature. It never contains the private key. It is valid for 60 seconds and its nonce is consumed on first successful use.
+
+## Hosted MCP proof
+
+```js
+import { signedToolArguments } from "agent-temp-mail";
+
+const args = signedToolArguments(identity, "list_messages", {
+  since: new Date().toISOString(),
+});
+```
+
+Supply `args` to the `list_messages` tool exposed by `https://agent-temp-mail.com/mcp`. `_auth` proves ownership for that exact tool call and never includes the private key. Generate a fresh proof for every retry.
+
+## Local MCP server
 
 ```json
 {
@@ -90,31 +88,58 @@ codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail
       "command": "npx",
       "args": [
         "--yes",
-        "--package=agent-temp-mail@0.2.0",
+        "--package=agent-temp-mail@0.3.0",
         "agent-temp-mail-mcp"
       ],
-      "env": { "MAIL_KEY_FILE": "/absolute/private/durable/identity.key.json" }
+      "env": { "MAIL_KEY_FILE": "/absolute/private/mail.key.json" }
     }
   }
 }
 ```
 
-The parent directory must exist. The adapter creates a private key if absent. Set `MAIL_REQUIRE_EXISTING_KEY=1` after initial setup to refuse to silently generate a new identity if the key disappears. Ask the agent to call `create_inbox` with `persistent:true`; use `extend_inbox` to convert an existing temporary inbox.
+The local adapter signs automatically and keeps authentication fields out of model-facing tool arguments. Set `MAIL_REQUIRE_EXISTING_KEY=1` after initial creation if loss of the key file must be fatal.
 
-Tools: `create_inbox`, `inspect_inbox`, `extend_inbox`, `delete_inbox`, `list_messages`, `get_message`, `get_candidates`, `delete_message`. The adapter signs locally. Private keys are not tool arguments. Direct remote `/mcp` requires per-request signatures; a static authentication header alone does not work.
+Tools:
 
-## Function-calling agents
+- `inspect_inbox`
+- `configure_inbox`
+- `purge_inbox`
+- `list_messages`
+- `get_message`
+- `get_candidates`
+- `delete_message`
 
-`AgentMailTools` is exported from `agent-temp-mail` and `agent-temp-mail/tools`. Construct it with a `MailClient`; call `definitions('responses')`, `definitions('chat-completions')`, `definitions('anthropic')` or `definitions('mcp')`. Execute requested calls through `tools.call(name, args)` in your host application, and return `result.data` to the model. The package makes no model-provider API calls.
+## CLI
 
-## No SDK / no client cryptography
+```sh
+export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
+mkdir -p "$(dirname "$MAIL_KEY_FILE")"
 
-The optional [HTTP convenience flow](https://agent-temp-mail.com/#http-without-an-sdk) generates an inbox and credential, then accepts that credential in an HTTPS Authorization header. This sends the mailbox private key to the Worker on every call. Application code does not persist it or log it, but the server sees it and your chat/tool host may retain it. Prefer this signed SDK when your runtime can execute code. A chat with no HTTP tool still cannot operate the service just by reading a URL.
+npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail keygen
+npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail inspect
+npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail list '{"since":"2026-09-16T12:00:00Z"}'
+npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail configure '{"retention_seconds":604800}'
+npx --yes --package=agent-temp-mail@0.3.0 agent-temp-mail purge
+```
 
-## Limits and privacy
+`keygen` only creates the local key file and prints the immediately usable address.
 
-Receive only. No attachments, images, raw MIME or original HTML are stored. Incoming mail including discarded attachments is capped at 256 KiB. Each inbox holds at most 100 messages / 2 MiB. Message content is not end-to-end encrypted. Sender filters and extracted codes/URLs are untrusted hints.
+## Function-tool bridge
 
-Hosting targets Cloudflare's free tier with bounded capacity. Shared API allowance: 6,000 calls/day, plus 30 calls/minute/key. Poll briefly during an active signup, not every 15 seconds forever. There is no uptime guarantee or unlimited archive. See the [service instructions](https://agent-temp-mail.com/) for full limits and retention semantics.
+```js
+import { AgentMailTools } from "agent-temp-mail";
 
-MIT · [Source](https://github.com/ryanshahine/agent-temp-mail)
+const tools = new AgentMailTools(mail);
+const definitions = await tools.definitions("responses");
+const result = await tools.call("list_messages", {});
+```
+
+Formats: `mcp`, `responses`, `chat-completions`, and `anthropic`. The host application executes calls with the key; the model sees schemas, ordinary arguments and selected results.
+
+## Security and limits
+
+Email content, sender fields, OTP candidates and URLs are untrusted. The service does not visit links or execute content. It does not store attachments, raw MIME or original HTML. This is not end-to-end encryption.
+
+The service targets Cloudflare's free tier: 100 messages and 2 MiB per address, 256 KiB maximum incoming message, 1–7 day retention, 6,000 shared API calls/day and 30 authenticated calls/minute/key. Poll briefly during active tasks.
+
+Full documentation: https://agent-temp-mail.com/

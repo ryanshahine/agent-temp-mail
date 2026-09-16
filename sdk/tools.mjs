@@ -20,7 +20,24 @@ export class AgentMailTools {
   }
 
   async definitions(format = "mcp") {
-    const { tools } = await this.rpc("tools/list");
+    const remote = await this.rpc("tools/list");
+    const tools = remote.tools.map((tool) => {
+      const { _auth, ...properties } = tool.inputSchema.properties;
+      return {
+        ...tool,
+        description: tool.description.replace(
+          " Hosted connectors must include _auth; local MCP adapters add authentication automatically.",
+          "",
+        ),
+        inputSchema: {
+          ...tool.inputSchema,
+          properties,
+          required: (tool.inputSchema.required ?? []).filter(
+            (name) => name !== "_auth",
+          ),
+        },
+      };
+    });
     if (format === "mcp") return tools;
     if (format === "anthropic") {
       return tools.map(({ name, description, inputSchema }) => ({

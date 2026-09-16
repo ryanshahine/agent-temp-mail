@@ -104,6 +104,66 @@ export function signedHeaders(
     Accept: "application/json, text/event-stream",
   };
 }
+function stableJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+    .join(",")}}`;
+}
+export function signedUrl(
+  identity,
+  url,
+  {
+    timestamp = String(Math.floor(Date.now() / 1000)),
+    nonce = randomBytes(18).toString("base64url"),
+  } = {},
+) {
+  const headers = signedHeaders(identity, "GET", url, "", {
+    timestamp,
+    nonce,
+  });
+  const u = new URL(url);
+  u.searchParams.set("mail_public_key", identity.public_key);
+  u.searchParams.set("mail_timestamp", timestamp);
+  u.searchParams.set("mail_nonce", nonce);
+  u.searchParams.set("mail_signature", headers["X-Mail-Signature"]);
+  return u.href;
+}
+export function signedToolArguments(
+  identity,
+  name,
+  args = {},
+  {
+    origin = "https://agent-temp-mail.com",
+    timestamp = String(Math.floor(Date.now() / 1000)),
+    nonce = randomBytes(18).toString("base64url"),
+  } = {},
+) {
+  const canonical = [
+    "agent-temp-mail:mcp:v1",
+    new URL(origin).origin,
+    name,
+    createHash("sha256").update(stableJson(args)).digest("base64url"),
+    timestamp,
+    nonce,
+  ].join("\n");
+  const key = createPrivateKey({
+    key: Buffer.from(identity.private_key_pkcs8, "base64url"),
+    type: "pkcs8",
+    format: "der",
+  });
+  return {
+    ...args,
+    _auth: {
+      public_key: identity.public_key,
+      timestamp,
+      nonce,
+      signature: sign(null, Buffer.from(canonical), key).toString("base64url"),
+    },
+  };
+}
 export class MailClient {
   constructor(
     identity,
@@ -149,16 +209,27 @@ export class MailClient {
     return `/v1/inboxes/${encodeURIComponent(address)}`;
   }
   create(options = {}) {
-    return this.request("POST", "/v1/inboxes", options);
+    return this.configure(options);
   }
   inspect(address) {
     return this.request("GET", this.box(address));
   }
   extend(options = {}, address) {
-    return this.request("PATCH", this.box(address), options);
+    return address
+      ? this.request("PATCH", this.box(address), options)
+      : this.configure(options);
+  }
+  configure(options = {}) {
+    return this.request("POST", "/v1/inboxes", options);
   }
   deleteInbox(address) {
+    return this.purge(address);
+  }
+  purge(address) {
     return this.request("DELETE", this.box(address));
+  }
+  signedUrl(path) {
+    return signedUrl(this.identity, this.baseUrl + path);
   }
   list(filters = {}, address) {
     return this.request(

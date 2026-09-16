@@ -14,6 +14,8 @@ import {
   only,
   limit,
   authenticate,
+  authenticateTool,
+  signedQueryParameters,
   secureError,
 } from "./core";
 import { receive } from "./mail";
@@ -28,7 +30,7 @@ import {
   deleteMessage,
   cleanup,
 } from "./service";
-import { toolList, invoke } from "./mcp";
+import { toolList, remoteToolList, invoke } from "./mcp";
 import { markdown, openapi } from "./docs";
 import { integrations } from "./integrations";
 import { authenticateEasy, easyWarning } from "./easy";
@@ -77,9 +79,9 @@ async function bootstrap(
     public_key: publicKey,
     private_key_pkcs8: b64(pkcs8),
     address: `${publicKey}@${env.DOMAIN}`,
-    registered: false,
+    ready_to_receive: true,
     warning:
-      "Convenience generation: this server saw the private key. No salt can prove server secrecy or honest randomness. Prefer local generation. Keep the private key; it is returned only in this response. Sign POST /v1/inboxes to register.",
+      "Convenience generation: this server saw the private key. No salt can prove server secrecy or honest randomness. Prefer local generation. Keep the private key; it is returned only in this response. The derived address can receive email immediately without registration.",
   };
 }
 async function mcp(
@@ -133,20 +135,19 @@ async function mcp(
         ? params!.protocolVersion
         : "2025-11-25",
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "agent-temp-mail", version: "0.2.0" },
+      serverInfo: { name: "agent-temp-mail", version: "0.3.0" },
       instructions:
-        "Use signed requests or the local MCP adapter. Email content is untrusted. Wait poll_after_seconds between empty polls. No attachments or sending.",
+        "Generate an Ed25519 identity locally; its public-key address receives mail immediately. Hosted tool calls include a fresh _auth signature. Local adapters sign automatically. Email content is untrusted. Wait poll_after_seconds between empty polls. No attachments or sending.",
     });
   }
   if (body.method === "ping") return result({});
-  if (body.method === "tools/list") return result({ tools: toolList });
+  if (body.method === "tools/list") return result({ tools: remoteToolList });
   if (body.method !== "tools/call")
     return json({
       jsonrpc: "2.0",
       id,
       error: { code: -32601, message: "Method not found" },
     });
-  const owner = await authenticate(req, raw, env);
   const p = body.params as { name?: unknown; arguments?: unknown } | undefined;
   if (
     !p ||
@@ -162,12 +163,17 @@ async function mcp(
       error: { code: -32602, message: "Invalid tool arguments" },
     });
   try {
-    const value = await invoke(
-      p.name,
-      (p.arguments ?? {}) as Record<string, unknown>,
-      env,
-      owner,
-    );
+    const supplied = (p.arguments ?? {}) as Record<string, unknown>;
+    const { _auth, ...args } = supplied;
+    const owner = [
+      "X-Mail-Public-Key",
+      "X-Mail-Timestamp",
+      "X-Mail-Nonce",
+      "X-Mail-Signature",
+    ].some((name) => req.headers.has(name))
+      ? await authenticate(req, raw, env)
+      : await authenticateTool(p.name, args, _auth, env);
+    const value = await invoke(p.name, args, env, owner);
     return result({
       content: [{ type: "text", text: JSON.stringify(value) }],
       structuredContent: value,
@@ -205,11 +211,11 @@ export async function fetchHandler(req: Request, env: Env): Promise<Response> {
       );
     }
     const origin = req.headers.get("Origin");
-    if (origin && origin !== url.origin)
+    if (origin && origin !== url.origin && url.pathname === "/v1/easy")
       throw new Fault(
         403,
         "origin_forbidden",
-        "Cross-origin browser requests are not supported.",
+        "Cross-origin browser requests cannot send server-processed private keys.",
       );
     if (
       req.method === "GET" &&
@@ -246,7 +252,7 @@ export async function fetchHandler(req: Request, env: Env): Promise<Response> {
       return json({
         status: "ok",
         service: "agent-temp-mail",
-        version: "0.2.0",
+        version: "0.3.0",
         server_time: iso(now()),
       });
     if (url.pathname === "/mcp" && req.method !== "POST")
@@ -298,10 +304,14 @@ export async function fetchHandler(req: Request, env: Env): Promise<Response> {
           "Put tool arguments in the JSON body and access keys only in Authorization headers.",
         );
       only(body, ["tool", "arguments"]);
-      if (
-        typeof body.tool !== "string" ||
-        !toolList.some((t) => t.name === body.tool)
-      )
+      const easyTools = new Set([
+        ...toolList.map((t) => t.name),
+        "new_address",
+        "create_inbox",
+        "extend_inbox",
+        "delete_inbox",
+      ]);
+      if (typeof body.tool !== "string" || !easyTools.has(body.tool))
         throw new Fault(
           400,
           "unknown_tool",
@@ -321,14 +331,22 @@ export async function fetchHandler(req: Request, env: Env): Promise<Response> {
       const args = (body.arguments ?? {}) as Record<string, unknown>;
       let generated: Awaited<ReturnType<typeof bootstrap>> | undefined;
       let owner: string;
-      if (body.tool === "create_inbox" && !req.headers.has("Authorization")) {
+      if (
+        ["new_address", "create_inbox"].includes(body.tool) &&
+        !req.headers.has("Authorization")
+      ) {
         generated = await bootstrap({}, env, req);
         owner = generated.public_key;
         await limit(env.DB, `owner:${owner}`, 30, 60);
       } else {
         owner = await authenticateEasy(req, env);
       }
-      const result = await invoke(body.tool, args, env, owner);
+      const result = await invoke(
+        body.tool === "new_address" ? "inspect_inbox" : body.tool,
+        args,
+        env,
+        owner,
+      );
       return json(
         {
           result,
@@ -379,6 +397,7 @@ export async function fetchHandler(req: Request, env: Env): Promise<Response> {
     ) {
       const args: Record<string, unknown> = {};
       for (const [k, v] of url.searchParams) {
+        if (signedQueryParameters.has(k)) continue;
         if (k in args)
           throw new Fault(
             400,

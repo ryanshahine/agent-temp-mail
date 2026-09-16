@@ -4,7 +4,12 @@ import { fetchHandler } from "../src/index";
 import { receive, htmlText, candidates } from "../src/mail";
 import { cleanup } from "../src/service";
 import { base32, unbase32, now, C } from "../src/core";
-import { generateIdentity, MailClient, signedHeaders } from "../sdk/client.mjs";
+import {
+  generateIdentity,
+  MailClient,
+  signedHeaders,
+  signedToolArguments,
+} from "../sdk/client.mjs";
 const origin = "https://agent-temp-mail.com";
 function client(identity = generateIdentity()) {
   return new MailClient(identity, {
@@ -86,6 +91,16 @@ describe("identity and authorization", () => {
       (await Promise.all([send(), send()])).map((x) => x.status).sort(),
     ).toEqual([200, 409]);
   });
+  it("supports one-use signed GET URLs without exposing the private key", async () => {
+    const a = client();
+    await deliver(a.address);
+    const url = a.signedUrl(`${a.box()}/messages?limit=1`);
+    expect(url).not.toContain(a.identity.private_key_pkcs8);
+    const first = await fetchHandler(new Request(url), env);
+    expect(first.status).toBe(200);
+    expect((await first.json()).messages).toHaveLength(1);
+    expect((await fetchHandler(new Request(url), env)).status).toBe(409);
+  });
   it("rejects old signatures and signature reuse on another origin", async () => {
     const a = client();
     await a.create();
@@ -107,16 +122,20 @@ describe("identity and authorization", () => {
       ).status,
     ).toBe(401);
   });
-  it("returns auth errors as JSON and prevents browser cross-origin use", async () => {
+  it("returns auth errors as JSON and keeps private-key convenience calls same-origin", async () => {
     expect(
       (await fetchHandler(new Request(origin + "/v1/inboxes/x"), env)).status,
     ).toBe(401);
     expect(
       (
         await fetchHandler(
-          new Request(origin + "/mcp", {
+          new Request(origin + "/v1/easy", {
             method: "POST",
-            headers: { Origin: "https://evil.example" },
+            headers: {
+              Origin: "https://evil.example",
+              "Content-Type": "application/json",
+            },
+            body: '{"tool":"new_address","arguments":{}}',
           }),
           env,
         )
@@ -125,38 +144,36 @@ describe("identity and authorization", () => {
   });
 });
 describe("inbox lifecycle", () => {
-  it("creates idempotently, extends, persists, and changes retention only for new mail", async () => {
+  it("makes a generated address immediately usable and changes retention only for new mail", async () => {
     const a = client();
-    const first = await a.create();
-    expect(first.persistent).toBe(false);
-    await deliver(a.address);
+    const first = await a.inspect();
+    expect(first.persistent).toBe(true);
+    expect(first.accepting_mail).toBe(true);
+    expect(first.storage_initialized).toBe(false);
+    expect(await deliver(a.address)).toBeUndefined();
     const page = await a.list();
     const before = await a.get(page.messages[0].id);
-    await a.extend({ persistent: true, retention_seconds: 604800 });
-    expect((await a.create()).persistent).toBe(true);
+    const configured = await a.configure({ retention_seconds: 604800 });
+    expect(configured.retention_seconds).toBe(604800);
     expect((await a.get(before.id)).expires_at).toBe(before.expires_at);
-    const after = await a.extend({ persistent: false, ttl_seconds: 3600 });
-    expect(after.persistent).toBe(false);
     await expect(
-      a.extend({ persistent: true, ttl_seconds: 3600 }),
-    ).rejects.toMatchObject({ status: 400 });
+      a.configure({ persistent: false, ttl_seconds: 3600 }),
+    ).rejects.toMatchObject({ status: 400, code: "address_always_active" });
   });
-  it("hides expired data immediately and allows same-owner recreation", async () => {
+  it("replaces legacy expired metadata automatically on the next delivery", async () => {
     const a = client();
     await a.create();
-    await deliver(a.address);
+    await deliver(a.address, fixture("Old code is 111111"));
     await env.DB.prepare("UPDATE inboxes SET expires_at=? WHERE address=?")
       .bind(now() - 1, a.address)
       .run();
-    await expect(a.inspect()).rejects.toMatchObject({ status: 410 });
-    expect(await deliver(a.address)).toContain("expired");
-    await a.create();
-    expect((await a.list()).messages).toHaveLength(0);
-    expect((await env.DB.prepare("SELECT * FROM usage").first()).messages).toBe(
-      0,
-    );
+    expect((await a.inspect()).storage_initialized).toBe(false);
+    expect(
+      await deliver(a.address, fixture("New code is 222222")),
+    ).toBeUndefined();
+    expect((await a.list()).messages).toHaveLength(1);
   });
-  it("deletes all mail with its inbox and does not let another key claim it", async () => {
+  it("purges stored mail while leaving the public-key address receivable", async () => {
     const a = client(),
       b = client();
     await a.create();
@@ -165,8 +182,10 @@ describe("inbox lifecycle", () => {
       status: 403,
     });
     await a.deleteInbox();
-    await expect(a.inspect()).rejects.toMatchObject({ status: 404 });
+    expect((await a.inspect()).storage_initialized).toBe(false);
     expect((await env.DB.prepare("SELECT * FROM usage").first()).bytes).toBe(0);
+    expect(await deliver(a.address)).toBeUndefined();
+    expect((await a.list()).messages).toHaveLength(1);
   });
   it("protects contact aliases from ordinary keys", async () => {
     const a = client();
@@ -302,9 +321,8 @@ describe("agent interfaces", () => {
     const a = await gen(),
       b = await gen();
     expect(a.public_key).not.toBe(b.public_key);
-    expect(a.registered).toBe(false);
+    expect(a.ready_to_receive).toBe(true);
     const c = client(a);
-    await c.create();
     expect((await c.inspect()).address).toBe(a.address);
   });
   it("supports MCP discovery, signed tool calls, and structured errors", async () => {
@@ -315,15 +333,19 @@ describe("agent interfaces", () => {
       (await call("initialize", { protocolVersion: "2025-11-25" })).result
         .capabilities.tools,
     ).toBeDefined();
-    expect((await call("tools/list", {})).result.tools).toHaveLength(8);
+    const tools = (await call("tools/list", {})).result.tools;
+    expect(tools).toHaveLength(7);
+    expect(
+      tools.every((tool) => tool.inputSchema.required.includes("_auth")),
+    ).toBe(true);
     expect(
       (
         await call("tools/call", {
-          name: "create_inbox",
-          arguments: { persistent: true },
+          name: "configure_inbox",
+          arguments: { retention_seconds: 604800 },
         })
-      ).result.structuredContent.persistent,
-    ).toBe(true);
+      ).result.structuredContent.retention_seconds,
+    ).toBe(604800);
     const wrong = await call("tools/call", {
       name: "inspect_inbox",
       arguments: { address: "hi@agent-temp-mail.com" },
@@ -333,7 +355,10 @@ describe("agent interfaces", () => {
     const unauth = await fetchHandler(
       new Request(origin + "/mcp", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://chatgpt.com",
+        },
         body: JSON.stringify({
           jsonrpc: "2.0",
           id: 1,
@@ -343,7 +368,30 @@ describe("agent interfaces", () => {
       }),
       env,
     );
-    expect(unauth.status).toBe(401);
+    expect(unauth.status).toBe(200);
+    const unauthBody = await unauth.json();
+    expect(unauthBody.result.isError).toBe(true);
+    expect(unauthBody.result.structuredContent.error.code).toBe(
+      "signature_required",
+    );
+
+    const hostedArgs = signedToolArguments(a.identity, "inspect_inbox", {});
+    const hosted = await fetchHandler(
+      new Request(origin + "/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "inspect_inbox", arguments: hostedArgs },
+        }),
+      }),
+      env,
+    );
+    expect((await hosted.json()).result.structuredContent.address).toBe(
+      a.address,
+    );
   });
   it("publishes Markdown and machine-readable contracts without credentials", async () => {
     const home = await fetchHandler(new Request(origin), env);
@@ -359,7 +407,7 @@ describe("agent interfaces", () => {
     const a = client();
     await expect(a.create({ ttl_seconds: 1 })).rejects.toMatchObject({
       status: 400,
-      code: "invalid_parameter",
+      code: "address_always_active",
     });
     await env.DB.prepare(
       "INSERT INTO limits(key,value,expires_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -424,7 +472,8 @@ describe("HTTP convenience mode", () => {
     }
     const deleted = await (await easy("delete_inbox", {}, key)).json();
     expect(deleted.result.deleted).toBe(true);
-    expect((await easy("inspect_inbox", {}, key)).status).toBe(404);
+    const afterPurge = await (await easy("inspect_inbox", {}, key)).json();
+    expect(afterPurge.result.storage_initialized).toBe(false);
   });
   it("isolates owners and rejects malformed, missing and cross-origin credentials without echoing them", async () => {
     const a = client(),
@@ -474,7 +523,7 @@ describe("HTTP convenience mode", () => {
       (await easy("list_messages", [], a.identity.private_key_pkcs8)).status,
     ).toBe(400);
   });
-  it("preserves existing create settings, extends to persistent, and shares owner limits with signed requests", async () => {
+  it("keeps legacy lifecycle aliases compatible and shares owner limits", async () => {
     const a = client();
     await a.create();
     const again = await (
@@ -484,7 +533,7 @@ describe("HTTP convenience mode", () => {
         a.identity.private_key_pkcs8,
       )
     ).json();
-    expect(again.result.persistent).toBe(false);
+    expect(again.result.persistent).toBe(true);
     expect(again.access_key).toBeUndefined();
     const extended = await (
       await easy(
@@ -500,7 +549,7 @@ describe("HTTP convenience mode", () => {
       ).toBe(200);
     await expect(a.inspect()).rejects.toMatchObject({ status: 429 });
   });
-  it("limits generated identities and documents every convenience tool", async () => {
+  it("limits generated identities and documents the current convenience tools", async () => {
     for (let i = 0; i < 5; i++)
       expect((await easy("create_inbox")).status).toBe(201);
     expect((await easy("create_inbox")).status).toBe(429);
@@ -511,7 +560,7 @@ describe("HTTP convenience mode", () => {
       spec.paths["/v1/easy"].post.requestBody.content["application/json"].schema
         .oneOf,
     ).toHaveLength(8);
-    expect(spec.components.securitySchemes.MailboxAccessKey.scheme).toBe(
+    expect(spec.components.securitySchemes.MailboxPrivateKey.scheme).toBe(
       "bearer",
     );
   });
