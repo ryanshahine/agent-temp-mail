@@ -9,10 +9,22 @@ Agent Temp Mail uses one portable identity: an Ed25519 keypair. The Base32 publi
 | Codex, Claude Code/Desktop, Cursor, Grok Build | Local stdio MCP adapter from npm |
 | ChatGPT or Claude hosted custom connector | Public /mcp with locally generated signed tool arguments |
 | API-based agents | MailClient and AgentMailTools in the host application |
-| HTTP runtime | Signed REST headers or one-use signed GET URLs |
-| Browsing-only chat | Signed GET URLs may work when the domain is reachable; mutations require a tool |
+| HTTP runtime | Signed REST headers or reusable read capabilities |
+| Browsing-only chat | Reusable GET read URL; mutations require a tool |
 
 A provider sandbox can block arbitrary domains even when its hosted MCP connector can reach them. Adding https://agent-temp-mail.com/mcp as a connector is separate from asking an ordinary chat to browse the homepage.
+
+## Browsing-only chat
+
+Generate the key and short-lived read capability locally:
+
+~~~sh
+export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail keygen
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail read-url
+~~~
+
+The same read URL can be fetched repeatedly for 10 minutes by default and 15 minutes maximum. It returns the latest 10 full messages with candidate codes and links. It is read-only, but anyone holding the URL can read the mailbox until expiry. See https://agent-temp-mail.com/chatgpt.
 
 ## Local MCP
 
@@ -23,7 +35,7 @@ Node.js 22.12+:
   "mcpServers": {
     "agent-temp-mail": {
       "command": "npx",
-      "args": ["--yes", "--package=agent-temp-mail@0.3.1", "agent-temp-mail-mcp"],
+      "args": ["--yes", "--package=agent-temp-mail@0.4.0", "agent-temp-mail-mcp"],
       "env": {"MAIL_KEY_FILE": "/absolute/private/path/agent.key.json"}
     }
   }
@@ -36,13 +48,13 @@ Codex:
 
 ~~~sh
 mkdir -p "$HOME/.config/agent-temp-mail"
-codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail-mcp
 ~~~
 
 Claude Code:
 
 ~~~sh
-claude mcp add --transport stdio --env MAIL_KEY_FILE=/absolute/private/path/agent.key.json agent-temp-mail -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
+claude mcp add --transport stdio --env MAIL_KEY_FILE=/absolute/private/path/agent.key.json agent-temp-mail -- npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail-mcp
 ~~~
 
 ## Hosted remote MCP
@@ -88,7 +100,8 @@ POST /v1/easy with {"tool":"new_address","arguments":{}} returns an immediately 
 
 ## Discovery
 
-- /, /llms.txt and /llms-full.txt: Markdown instructions.
+- /: HTML overview; /chatgpt: GET-only flow.
+- /README.md, /llms.txt and /llms-full.txt: Markdown/plain-text instructions.
 - /openapi.json: HTTP contract.
 - /mcp: Streamable HTTP JSON-RPC initialization and tools.
 

@@ -48,11 +48,12 @@ try {
     "--no-fund",
     join(dir, pack.filename),
   ]);
-  const consumer = `import { generateIdentity, loadIdentity, MailClient, AgentMailTools } from 'agent-temp-mail';
+  const consumer = `import { generateIdentity, loadIdentity, MailClient, AgentMailTools, readCapability, readUrl } from 'agent-temp-mail';
 import { MailClient as DirectClient } from 'agent-temp-mail/client';
 import { AgentMailTools as DirectTools } from 'agent-temp-mail/tools';
 const mail = new MailClient(generateIdentity());
 if (!mail.address.endsWith('@agent-temp-mail.com') || MailClient !== DirectClient || AgentMailTools !== DirectTools) throw new Error('Bad public exports');
+if (!mail.readUrl({ttlSeconds: 600}).startsWith('https://agent-temp-mail.com/r/v1.') || !readUrl(mail.identity).includes(readCapability(mail.identity).public_key)) throw new Error('Bad read capability exports');
 const identity = await loadIdentity('./persistent.key.json', {create:true});
 const resumed = await loadIdentity('./persistent.key.json');
 if (identity.public_key !== resumed.public_key) throw new Error('Identity changed');
@@ -70,6 +71,12 @@ console.log('Installed package imports and identity persistence passed');`;
   );
   assert.ok(cli.address.endsWith("@agent-temp-mail.com"));
   assert.ok(!JSON.stringify(cli).includes("private_key_pkcs8"));
+  const read = JSON.parse(
+    run(process.execPath, ["node_modules/.bin/agent-temp-mail", "read-url"], {
+      env: { ...process.env, MAIL_KEY_FILE: join(dir, "cli.key.json") },
+    }),
+  );
+  assert.ok(read.read_url.startsWith("https://agent-temp-mail.com/r/v1."));
   let refused = false;
   try {
     run(process.execPath, ["node_modules/.bin/agent-temp-mail-mcp"], {
@@ -83,10 +90,12 @@ console.log('Installed package imports and identity persistence passed');`;
     refused = true;
   }
   assert.ok(refused, "MCP must fail when an existing identity is required");
-  const types = `import { generateIdentity, MailClient, AgentMailTools, type Inbox } from 'agent-temp-mail';
+  const types = `import { generateIdentity, readCapability, readUrl, MailClient, AgentMailTools, type Inbox, type ReadCapability } from 'agent-temp-mail';
 import { MailClient as DirectClient } from 'agent-temp-mail/client';
 const mail = new MailClient(generateIdentity());
 const other: DirectClient = mail;
+const capability: ReadCapability = readCapability(mail.identity);
+const url: string = readUrl(mail.identity, {ttlSeconds: 600});
 const box: Inbox = await other.create({persistent:true});
 const data = await mail.get('message');
 const text: string = data.text;

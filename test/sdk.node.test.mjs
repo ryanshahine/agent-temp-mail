@@ -5,6 +5,8 @@ import {
   MailClient,
   signedToolArguments,
   signedUrl,
+  readCapability,
+  readUrl,
 } from "../sdk/client.mjs";
 import { AgentMailTools } from "../sdk/tools.mjs";
 
@@ -96,4 +98,16 @@ test("signed URLs and hosted MCP proofs never contain the private key", () => {
   assert.equal("omitted" in args, false);
   assert.ok(args._auth.signature);
   assert.ok(!JSON.stringify(args).includes(identity.private_key_pkcs8));
+});
+
+test("read capabilities are deterministic, reusable URLs with bounded TTLs", () => {
+  const identity = generateIdentity();
+  const options = { now: 1_800_000_000, ttlSeconds: 600 };
+  const capability = readCapability(identity, options);
+  const url = readUrl(identity, options);
+  assert.equal(capability.expires, "1800000600");
+  assert.equal(url, `https://agent-temp-mail.com/r/${capability.capability}`);
+  assert.equal(readUrl(identity, options), url);
+  assert.ok(!url.includes(identity.private_key_pkcs8));
+  assert.throws(() => readUrl(identity, { ttlSeconds: 901 }), /ttlSeconds/);
 });

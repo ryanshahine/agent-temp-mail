@@ -9,6 +9,7 @@ import {
   MailClient,
   signedHeaders,
   signedToolArguments,
+  readUrl,
 } from "../sdk/client.mjs";
 const origin = "https://agent-temp-mail.com";
 function client(identity = generateIdentity()) {
@@ -100,6 +101,82 @@ describe("identity and authorization", () => {
     expect(first.status).toBe(200);
     expect((await first.json()).messages).toHaveLength(1);
     expect((await fetchHandler(new Request(url), env)).status).toBe(409);
+  });
+  it("supports a reusable read-only capability before and after delivery", async () => {
+    const a = client();
+    const url = a.readUrl({ ttlSeconds: 600 });
+    expect(url).not.toContain(a.identity.private_key_pkcs8);
+    const empty = await fetchHandler(new Request(url), env);
+    expect(empty.status).toBe(200);
+    expect(empty.headers.get("Cache-Control")).toBe("no-store");
+    expect(empty.headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+    expect(empty.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect((await empty.json()).messages).toHaveLength(0);
+    await deliver(a.address, fixture("Your code is 246810"));
+    const received = await fetchHandler(new Request(url), env);
+    const body = await received.json();
+    expect(body.address).toBe(a.address);
+    expect(body.messages[0].text).toContain("246810");
+    expect(body.messages[0].candidates.source_message_id).toBe(
+      body.messages[0].id,
+    );
+    expect((await fetchHandler(new Request(url), env)).status).toBe(200);
+    expect(
+      (
+        await fetchHandler(
+          new Request(url, { method: "POST", body: '{"retention":1}' }),
+          env,
+        )
+      ).status,
+    ).toBe(405);
+  });
+  it("returns only the newest 10 messages in newest-first order", async () => {
+    const a = client();
+    const url = a.readUrl();
+    for (let n = 0; n < 11; n++)
+      await deliver(a.address, fixture(`Sequence ${n}; code 123456`));
+    const messages = (await (await fetchHandler(new Request(url), env)).json())
+      .messages;
+    expect(messages).toHaveLength(10);
+    expect(messages[0].text).toContain("Sequence 10");
+    expect(messages[9].text).toContain("Sequence 1");
+    expect(
+      messages.some((message) => message.text.includes("Sequence 0")),
+    ).toBe(false);
+  });
+  it("rejects expired, overlong, altered, and wrong-owner read capabilities", async () => {
+    const a = client(),
+      b = client();
+    const expired = readUrl(a.identity, {
+      now: now() - 2,
+      ttlSeconds: 1,
+    });
+    const tooLong = readUrl(a.identity, {
+      now: now() + 5,
+      ttlSeconds: 900,
+    });
+    expect((await fetchHandler(new Request(expired), env)).status).toBe(401);
+    expect((await fetchHandler(new Request(tooLong), env)).status).toBe(401);
+
+    const valid = a.readUrl({ ttlSeconds: 600 });
+    const changedExpiry = valid.replace(
+      /\.(\d{10})\./,
+      (_all, expiry) => `.${Number(expiry) + 1}.`,
+    );
+    expect((await fetchHandler(new Request(changedExpiry), env)).status).toBe(
+      401,
+    );
+    const changedOwner = valid.replace(
+      a.identity.public_key,
+      b.identity.public_key,
+    );
+    expect((await fetchHandler(new Request(changedOwner), env)).status).toBe(
+      401,
+    );
+    const badSignature = valid.slice(0, -1) + (valid.endsWith("A") ? "B" : "A");
+    expect((await fetchHandler(new Request(badSignature), env)).status).toBe(
+      401,
+    );
   });
   it("rejects old signatures and signature reuse on another origin", async () => {
     const a = client();
@@ -395,12 +472,18 @@ describe("agent interfaces", () => {
   });
   it("publishes Markdown and machine-readable contracts without credentials", async () => {
     const home = await fetchHandler(new Request(origin), env);
-    expect(home.headers.get("Content-Type")).toContain("text/markdown");
-    expect(await home.text()).toContain("X-Mail-Signature");
+    expect(home.headers.get("Content-Type")).toContain("text/html");
+    expect(await home.text()).toContain("read_url");
+    const llms = await fetchHandler(new Request(origin + "/llms.txt"), env);
+    expect(llms.headers.get("Content-Type")).toContain("text/plain");
+    expect(await llms.text()).toContain("agent-temp-mail:read:v1");
+    const chatgpt = await fetchHandler(new Request(origin + "/chatgpt"), env);
+    expect(await chatgpt.text()).toContain("agent-temp-mail read-url");
     const spec = await (
       await fetchHandler(new Request(origin + "/openapi.json"), env)
     ).json();
     expect(spec.openapi).toBe("3.1.0");
+    expect(spec.paths["/r/{capability}"]).toBeDefined();
     expect(spec.paths["/v1/inboxes/{address}/candidates"]).toBeDefined();
   });
   it("returns actionable validation and rate-limit errors", async () => {

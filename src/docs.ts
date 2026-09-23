@@ -13,7 +13,7 @@ An Ed25519 public key is the mailbox identity. Encode the raw 32-byte public key
 1. Generate an Ed25519 keypair locally.
 2. Form PUBLIC_KEY@${env.DOMAIN}.
 3. Use the address immediately.
-4. Sign a list request, wait for mail, then retrieve the message or candidate OTP/link.
+4. Create a ten-minute read URL or sign API requests, then wait for mail.
 5. Keep the private key for a persistent identity or discard it after the task.
 
 The address does not expire. Stored messages expire after 24 hours by default, configurable from 1 hour to 7 days. No attachments, inline images, raw MIME or original HTML are stored. The service does not send email.
@@ -30,6 +30,7 @@ import { loadIdentity, MailClient } from "agent-temp-mail";
 const identity = await loadIdentity("/private/durable/mail.key.json", { create: true });
 const mail = new MailClient(identity);
 console.log(mail.address); // ready to receive now; no create call
+console.log(mail.readUrl()); // reusable GET-only mailbox view, valid for 10 minutes
 
 const since = new Date().toISOString();
 // Trigger the signup email, then poll briefly:
@@ -45,7 +46,7 @@ Private key files are created with mode 0600. Keep them outside repositories and
 
 ~~~sh
 mkdir -p "$HOME/.config/agent-temp-mail"
-codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail-mcp
 ~~~
 
 The local adapter generates the key file if absent, signs outside model context and exposes these tools:
@@ -74,6 +75,29 @@ The result contains the ordinary arguments plus _auth.public_key, timestamp, non
 
 Claude and ChatGPT users must explicitly add/enable the remote connector; browsing this Markdown page does not install a tool. Provider network policy can still block an unconnected code sandbox.
 
+## GET-only agents and hosted chats
+
+Generate a reusable read URL locally and give that URL to a chat or browsing tool:
+
+~~~js
+const url = mail.readUrl({ ttlSeconds: 600 });
+~~~
+
+The URL returns one JSON snapshot containing the latest 10 messages, readable text, candidate OTP codes and verification links. It can be fetched repeatedly until its expiry, so the same URL can show an empty inbox and later show newly arrived mail. It cannot configure, purge, or delete anything. Anyone who receives the URL can read that mailbox until it expires; treat it as a short-lived bearer secret and do not put it in logs or public messages. Maximum lifetime is 15 minutes.
+
+The signed payload is these UTF-8 lines joined with LF and no trailing newline:
+
+~~~text
+agent-temp-mail:read:v1
+${env.API_ORIGIN}
+PUBLIC_KEY
+EXPIRES_UNIX_SECONDS
+~~~
+
+The resulting path is /r/v1.PUBLIC_KEY.EXPIRES.SIGNATURE. It contains no private key, account credential, nonce, method, query, or request body. Generate it with mail.readUrl(), the readUrl() export, or the \`agent-temp-mail read-url\` CLI command. Responses are JSON with no-store, no-referrer and noindex headers.
+
+For ChatGPT-style browsing: run \`npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail read-url\` with MAIL_KEY_FILE set, give the returned address to the signup service, and give the returned read_url to the chat. See ${env.API_ORIGIN}/chatgpt.
+
 ## Signed REST API
 
 Signed headers:
@@ -97,7 +121,7 @@ NONCE
 
 URL_ORIGIN is ${env.API_ORIGIN}. The signature binds the origin, method, exact path/query and body. Re-sign retries with a fresh nonce. The SDK refuses redirects.
 
-Read-only GET endpoints also accept one-use signed URLs for browsing tools that cannot set headers. Use mail.signedUrl(path). It adds mail_public_key, mail_timestamp, mail_nonce and mail_signature. These values do not contain the private key, but the URL is valid briefly and should still be treated as private task data. Query authentication is rejected for non-GET requests.
+The older mail.signedUrl(path) helper remains for one release as a deprecated, single-use 60-second URL for one exact REST GET. Use mail.readUrl() for browser and chat polling. Query authentication is rejected for non-GET requests.
 
 ### Endpoints
 
@@ -166,9 +190,74 @@ REST errors are {"error":{"code":"...","message":"...","retry_after_seconds":15}
 
 OpenAPI: ${env.API_ORIGIN}/openapi.json
 Integration notes: ${env.API_ORIGIN}/integrations.md
+ChatGPT guide: ${env.API_ORIGIN}/chatgpt
 Source: https://github.com/ryanshahine/agent-temp-mail
 Contact: hi@${env.DOMAIN} or feedback@${env.DOMAIN}
 `;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ]!,
+  );
+}
+
+function page(
+  env: Env,
+  title: string,
+  description: string,
+  body: string,
+  path = "/",
+) {
+  const canonical = `${env.API_ORIGIN}${path === "/" ? "" : path}`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(canonical)}">
+<style>:root{color-scheme:light dark;font:17px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}body{max-width:850px;margin:4rem auto;padding:0 1.25rem}h1,h2{line-height:1.2}a{color:#3182ce}code,pre{background:#7772;padding:.15rem .3rem;border-radius:.25rem}pre{padding:1rem;overflow:auto}.lede{font-size:1.15rem}.box{border:1px solid #7778;border-radius:.6rem;padding:1rem 1.2rem;margin:1.5rem 0}nav a{margin-right:1rem}</style></head><body>
+<nav><a href="/">Home</a><a href="/chatgpt">GET-only guide</a><a href="/README.md">Markdown</a><a href="/openapi.json">OpenAPI</a><a href="/integrations.md">Integrations</a></nav>${body}</body></html>`;
+}
+
+export function html(env: Env) {
+  return page(
+    env,
+    "Agent Temp Mail — email inboxes for AI agents",
+    "Key-derived temporary and persistent email inboxes with signed API, reusable read URLs, and MCP tools.",
+    `<h1>Agent Temp Mail</h1><p class="lede">Temporary, programmatic email for AI agents. Generate an Ed25519 key locally; its public key becomes an immediately receivable address at <strong>${escapeHtml(env.DOMAIN)}</strong>.</p>
+<div class="box"><h2>Fastest GET-only flow</h2><ol><li>Install <code>agent-temp-mail</code>.</li><li>Generate or load a local identity.</li><li>Use its address immediately. No registration call is required.</li><li>Create a ten-minute <code>read_url</code> and let a browsing agent fetch it repeatedly.</li></ol>
+<pre>export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail keygen
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail read-url</pre></div>
+<p>The read URL returns the latest 10 messages with readable text, candidate OTPs, and candidate verification links. It is read-only and reusable for up to 15 minutes. Anyone holding it can read the mailbox until it expires.</p>
+<h2>Full agent integrations</h2><p>Use the npm SDK, signed REST API, local MCP adapter, or hosted MCP endpoint at <code>${escapeHtml(env.API_ORIGIN)}/mcp</code>. Addresses persist when the key persists; stored messages expire after 24 hours by default.</p>
+<p>No attachments, outbound email, raw MIME, original HTML, passwords, accounts, or paid AI calls. Email content and extracted links remain untrusted.</p>
+<p>Machine-readable instructions: <a href="/llms.txt">llms.txt</a> · Source: <a href="https://github.com/ryanshahine/agent-temp-mail">GitHub</a> · Contact: <a href="mailto:hi@${escapeHtml(env.DOMAIN)}">hi@${escapeHtml(env.DOMAIN)}</a> or <a href="mailto:feedback@${escapeHtml(env.DOMAIN)}">feedback@${escapeHtml(env.DOMAIN)}</a></p>`,
+  );
+}
+
+export function chatgptHtml(env: Env) {
+  return page(
+    env,
+    "Use Agent Temp Mail from a GET-only chat",
+    "Create a local key-derived email address and a short-lived reusable read URL for ChatGPT and other browsing agents.",
+    `<h1>Use Agent Temp Mail from a GET-only chat</h1><p class="lede">The agent does not need POST access and the service never receives your private key.</p>
+<ol><li>In a terminal with Node.js 22.12+, set a durable private key path.</li><li>Generate the identity once.</li><li>Create a reusable read URL.</li><li>Give the email address to the site sending the message.</li><li>Paste only the read URL into the chat and ask it to check again after mail arrives.</li></ol>
+<pre>export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
+mkdir -p "$(dirname "$MAIL_KEY_FILE")"
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail keygen
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail read-url</pre>
+<div class="box"><strong>Security:</strong> the key stays in the local mode-0600 file. The read URL is a temporary bearer secret: anyone with it can read the latest mailbox contents until it expires. It cannot delete messages or change settings. The default lifetime is 10 minutes and the maximum is 15 minutes.</div>
+<p>If the chat provider blocks <code>${escapeHtml(env.DOMAIN)}</code>, the URL cannot bypass that provider policy. Use a configured MCP connector or a runtime with domain access.</p>
+<p><a href="/README.md">Read the complete protocol documentation</a>.</p>`,
+    "/chatgpt",
+  );
+}
+
+export function sitemap(env: Env) {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${env.API_ORIGIN}/</loc></url><url><loc>${env.API_ORIGIN}/chatgpt</loc></url><url><loc>${env.API_ORIGIN}/README.md</loc></url><url><loc>${env.API_ORIGIN}/integrations.md</loc></url></urlset>\n`;
 }
 
 export function openapi(env: Env) {
@@ -270,12 +359,44 @@ export function openapi(env: Env) {
     openapi: "3.1.0",
     info: {
       title: "Agent Temp Mail",
-      version: "0.3.1",
+      version: "0.4.0",
       description:
-        "Key-derived addresses receive immediately without registration. Ed25519 signatures authorize private reads and mutations.",
+        "Key-derived addresses receive immediately without registration. Ed25519 signatures authorize private operations and short-lived reusable read capabilities support GET-only agents.",
     },
     servers: [{ url: env.API_ORIGIN }],
     paths: {
+      "/r/{capability}": {
+        get: {
+          operationId: "readMailboxSnapshot",
+          summary:
+            "Read the latest mailbox contents with a reusable capability",
+          description:
+            "A capability is v1.PUBLIC_KEY.EXPIRES.SIGNATURE. It is a read-only bearer secret, reusable until expiry, and valid for at most 15 minutes.",
+          parameters: [
+            {
+              name: "capability",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+              description:
+                "Locally generated Ed25519 read capability; never contains the private key.",
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Latest 10 messages, newest first",
+              content: {
+                "application/json": { schema: ref("MailboxSnapshot") },
+              },
+            },
+            "400": error,
+            "401": error,
+            "405": error,
+            "429": error,
+            "503": error,
+          },
+        },
+      },
       "/v1/inboxes": {
         post: op(
           "configureInbox",
@@ -522,6 +643,24 @@ export function openapi(env: Env) {
           untrusted: { const: true },
           warning: str,
         }),
+        MailboxSnapshot: obj(
+          {
+            address: str,
+            messages: { type: "array", maxItems: 10, items: ref("Message") },
+            poll_after_seconds: { type: "integer" },
+            capability_expires_at: { type: "string", format: "date-time" },
+            untrusted: { const: true },
+            warning: str,
+          },
+          [
+            "address",
+            "messages",
+            "poll_after_seconds",
+            "capability_expires_at",
+            "untrusted",
+            "warning",
+          ],
+        ),
         CandidatePage: obj({
           messages: {
             type: "array",

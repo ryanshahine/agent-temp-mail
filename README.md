@@ -11,7 +11,7 @@ An Ed25519 public key is the mailbox identity. Its lowercase unpadded Base32 enc
 - Addresses remain stable as long as the agent retains its key.
 - Messages expire after 24 hours by default, configurable from 1 hour to 7 days.
 - Cursor pagination, sender/time filters, candidate OTPs and verification links.
-- Signed REST, one-use signed GET URLs, local MCP and hosted remote MCP.
+- Reusable short-lived read URLs, signed REST, local MCP and hosted remote MCP.
 - No outbound mail, attachments, raw MIME, original HTML or paid AI calls.
 - Reserved private contact inboxes: `hi@agent-temp-mail.com` and `feedback@agent-temp-mail.com`.
 
@@ -32,6 +32,7 @@ const identity = await loadIdentity("/private/durable/mail.key.json", {
 const mail = new MailClient(identity);
 
 console.log(mail.address); // ready to receive now
+console.log(mail.readUrl()); // reusable GET-only snapshot for 10 minutes
 const since = new Date().toISOString();
 // Trigger the external signup email.
 const page = await mail.wait({ since, timeoutSeconds: 120 });
@@ -53,7 +54,7 @@ Private key files use mode `0600`. Keep them outside repositories and model cont
 
 ```sh
 mkdir -p "$HOME/.config/agent-temp-mail"
-codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail-mcp
+codex mcp add agent-temp-mail --env MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json" -- npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail-mcp
 ```
 
 The adapter holds and uses the private key locally. It exposes `inspect_inbox`, `configure_inbox`, `purge_inbox`, `list_messages`, `get_message`, `get_candidates`, and `delete_message`.
@@ -74,7 +75,27 @@ const args = signedToolArguments(identity, "list_messages", {
 
 Users must explicitly add and enable the connector in ChatGPT or Claude. A provider's ordinary browser or code sandbox may have separate network restrictions.
 
-## Signed REST and browser-compatible reads
+## Browser and GET-only agent reads
+
+`mail.readUrl()` signs a read-only capability locally. The resulting URL returns the latest 10 messages, including readable text and candidate OTPs/verification links, and can be fetched repeatedly until it expires:
+
+```js
+const url = mail.readUrl({ ttlSeconds: 600 });
+```
+
+The URL never contains the private key. It is a bearer secret: anyone who has it can read the mailbox until expiry. Default lifetime is 10 minutes and the maximum is 15 minutes. It cannot mutate the mailbox.
+
+The CLI prints both the address and URL for a browsing chat:
+
+```sh
+export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail keygen
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail read-url
+```
+
+See the [GET-only chat guide](https://agent-temp-mail.com/chatgpt).
+
+## Signed REST
 
 The standard API uses `X-Mail-Public-Key`, `X-Mail-Timestamp`, `X-Mail-Nonce`, and `X-Mail-Signature`. Sign:
 
@@ -88,9 +109,9 @@ TIMESTAMP
 NONCE
 ```
 
-For a retrieval tool that cannot set headers, `mail.signedUrl(path)` returns a one-use GET URL whose public signature expires after 60 seconds. The private key is never placed in the URL.
+`mail.signedUrl(path)` remains for one release as a deprecated single-use URL for one exact REST GET. New clients should use `mail.readUrl()`.
 
-See the [live Markdown documentation](https://agent-temp-mail.com/), [OpenAPI](https://agent-temp-mail.com/openapi.json), and [integration guide](https://agent-temp-mail.com/integrations.md).
+See the [service homepage](https://agent-temp-mail.com/), [live Markdown documentation](https://agent-temp-mail.com/README.md), [OpenAPI](https://agent-temp-mail.com/openapi.json), and [integration guide](https://agent-temp-mail.com/integrations.md).
 
 ## Receiving rules and limits
 

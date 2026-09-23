@@ -112,6 +112,7 @@ function stableJson(value) {
     .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
     .join(",")}}`;
 }
+/** @deprecated Use readUrl() for a reusable GET-only mailbox snapshot. */
 export function signedUrl(
   identity,
   url,
@@ -130,6 +131,47 @@ export function signedUrl(
   u.searchParams.set("mail_nonce", nonce);
   u.searchParams.set("mail_signature", headers["X-Mail-Signature"]);
   return u.href;
+}
+export function readCapability(
+  identity,
+  {
+    origin = "https://agent-temp-mail.com",
+    ttlSeconds = 600,
+    now = Math.floor(Date.now() / 1000),
+  } = {},
+) {
+  validateIdentity(identity);
+  if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > 900)
+    throw new RangeError("ttlSeconds must be an integer from 1 to 900.");
+  if (!Number.isSafeInteger(now) || now < 1)
+    throw new RangeError("now must be a positive integer in Unix seconds.");
+  const normalizedOrigin = new URL(origin).origin;
+  const expires = String(now + ttlSeconds);
+  const canonical = [
+    "agent-temp-mail:read:v1",
+    normalizedOrigin,
+    identity.public_key,
+    expires,
+  ].join("\n");
+  const key = createPrivateKey({
+    key: Buffer.from(identity.private_key_pkcs8, "base64url"),
+    type: "pkcs8",
+    format: "der",
+  });
+  const signature = sign(null, Buffer.from(canonical), key).toString(
+    "base64url",
+  );
+  return {
+    public_key: identity.public_key,
+    expires,
+    signature,
+    capability: `v1.${identity.public_key}.${expires}.${signature}`,
+  };
+}
+export function readUrl(identity, options = {}) {
+  const origin = new URL(options.origin || "https://agent-temp-mail.com")
+    .origin;
+  return `${origin}/r/${readCapability(identity, { ...options, origin }).capability}`;
 }
 export function signedToolArguments(
   identity,
@@ -235,8 +277,12 @@ export class MailClient {
   purge(address) {
     return this.request("DELETE", this.box(address));
   }
+  /** @deprecated Use readUrl() for a reusable GET-only mailbox snapshot. */
   signedUrl(path) {
     return signedUrl(this.identity, this.baseUrl + path);
+  }
+  readUrl(options = {}) {
+    return readUrl(this.identity, { ...options, origin: this.baseUrl });
   }
   list(filters = {}, address) {
     return this.request(

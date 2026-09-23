@@ -57,6 +57,14 @@ export interface Page<T = MessageSummary> {
   untrusted: true;
   warning: string;
 }
+export interface MailboxSnapshot {
+  address: string;
+  messages: Message[];
+  poll_after_seconds: number;
+  capability_expires_at: string;
+  untrusted: true;
+  warning: string;
+}
 export interface Deletion {
   deleted: boolean;
   address?: string;
@@ -81,10 +89,25 @@ export function signedHeaders(
   body?: string,
   options?: { timestamp?: string; nonce?: string },
 ): Record<string, string>;
+/** @deprecated Use readUrl() for a reusable GET-only mailbox snapshot. */
 export function signedUrl(
   identity: Identity,
   url: string,
   options?: { timestamp?: string; nonce?: string },
+): string;
+export interface ReadCapability {
+  public_key: string;
+  expires: string;
+  signature: string;
+  capability: string;
+}
+export function readCapability(
+  identity: Identity,
+  options?: { origin?: string; ttlSeconds?: number; now?: number },
+): ReadCapability;
+export function readUrl(
+  identity: Identity,
+  options?: { origin?: string; ttlSeconds?: number; now?: number },
 ): string;
 export function signedToolArguments<T extends Record<string, unknown>>(
   identity: Identity,
@@ -119,7 +142,9 @@ export class MailClient {
   extend(options?: InboxOptions, address?: string): Promise<Inbox>;
   deleteInbox(address?: string): Promise<Deletion>;
   purge(address?: string): Promise<Deletion>;
+  /** @deprecated Use readUrl() for a reusable GET-only mailbox snapshot. */
   signedUrl(path: string): string;
+  readUrl(options?: { ttlSeconds?: number; now?: number }): string;
   list(filters?: Filters, address?: string): Promise<Page>;
   candidates(
     filters?: Filters,

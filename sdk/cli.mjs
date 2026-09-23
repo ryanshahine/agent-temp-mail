@@ -6,7 +6,7 @@ const path =
   args.find((a) => a.startsWith("--key="))?.slice(6);
 if (!path) {
   console.error(
-    "Set MAIL_KEY_FILE to a private file path (or --key=/path/identity.key.json). Commands: keygen, inspect, configure, list, candidates, get ID, delete-message ID, purge. Optional JSON arguments for configure/list/candidates. Legacy aliases: create, extend, delete-inbox.",
+    "Set MAIL_KEY_FILE to a private file path (or --key=/path/identity.key.json). Commands: keygen, read-url [TTL_SECONDS], inspect, configure, list, candidates, get ID, delete-message ID, purge. Optional JSON arguments for configure/list/candidates. Legacy aliases: create, extend, delete-inbox.",
   );
   process.exit(1);
 }
@@ -24,6 +24,14 @@ try {
         public_key: identity.public_key,
         address: client.address,
         key_file: path,
+      };
+      break;
+    case "read-url":
+      result = {
+        address: client.address,
+        read_url: client.readUrl({
+          ttlSeconds: values[0] === undefined ? 600 : Number(values[0]),
+        }),
       };
       break;
     case "create":

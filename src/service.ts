@@ -186,6 +186,22 @@ export function full(m: MessageRow) {
     warning,
   };
 }
+export async function snapshot(env: Env, owner: string) {
+  const address = ownerAddress(owner, env);
+  await inbox(env, address, owner);
+  const result = await env.DB.prepare(
+    "SELECT * FROM messages WHERE inbox=? AND expires_at>? ORDER BY seq DESC LIMIT 10",
+  )
+    .bind(address, now())
+    .all<MessageRow>();
+  return {
+    address,
+    messages: result.results.map(full),
+    poll_after_seconds: C.poll,
+    untrusted: true,
+    warning,
+  };
+}
 export async function getMessage(
   env: Env,
   address: string,

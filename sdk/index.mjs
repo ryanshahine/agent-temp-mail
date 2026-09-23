@@ -4,6 +4,8 @@ export {
   loadIdentity,
   signedHeaders,
   signedUrl,
+  readCapability,
+  readUrl,
   signedToolArguments,
   base32,
   MailClient,

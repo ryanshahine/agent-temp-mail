@@ -12,6 +12,8 @@ export const C = {
   maxRetention: 604800,
   maxRequest: 16384,
   poll: 15,
+  readCapability: 600,
+  maxReadCapability: 900,
 };
 export class Fault extends Error {
   constructor(
@@ -263,6 +265,58 @@ async function verifyProof(
       "Nonce already used. Sign retries with a fresh nonce.",
     );
   return owner;
+}
+
+/** Verify a reusable, read-only capability without consuming a nonce. */
+export async function verifyReadCapability(
+  owner: string,
+  expires: string,
+  sig: string,
+  env: Env,
+) {
+  const pub = unbase32(owner);
+  if (!/^\d{10}$/.test(expires))
+    throw new Fault(
+      400,
+      "invalid_capability_expiry",
+      "Capability expiry must be Unix seconds as exactly 10 digits.",
+    );
+  const expiry = Number(expires);
+  const current = now();
+  if (expiry <= current)
+    throw new Fault(401, "capability_expired", "Read capability has expired.");
+  if (expiry > current + C.maxReadCapability)
+    throw new Fault(
+      401,
+      "capability_too_long",
+      `Read capabilities may be valid for at most ${C.maxReadCapability} seconds.`,
+    );
+  let valid = false;
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      pub,
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
+    const canonical = [
+      "agent-temp-mail:read:v1",
+      env.API_ORIGIN,
+      owner,
+      expires,
+    ].join("\n");
+    valid = await crypto.subtle.verify(
+      "Ed25519",
+      key,
+      unb64(sig),
+      enc.encode(canonical),
+    );
+  } catch {}
+  if (!valid)
+    throw new Fault(401, "invalid_capability", "Read capability is invalid.");
+  await limit(env.DB, `capability:${owner}`, 60, 60);
+  return { owner, expires: expiry };
 }
 
 export async function authenticate(

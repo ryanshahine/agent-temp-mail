@@ -57,15 +57,17 @@ The address is permanent for the key. Default message retention is 24 hours and 
 
 `create()` and `extend()` remain compatibility aliases for configuration. Address lifetime parameters are obsolete; `persistent:false` and `ttl_seconds` are rejected.
 
-## One-use signed GET URLs
+## Reusable read URLs for GET-only agents
 
-For a retrieval tool that cannot set custom headers:
+For a chat or retrieval tool that can only make GET requests:
 
 ```js
-const url = mail.signedUrl(`${mail.box()}/messages?limit=10`);
+const url = mail.readUrl({ ttlSeconds: 600 });
 ```
 
-The URL contains the public key, timestamp, nonce and signature. It never contains the private key. It is valid for 60 seconds and its nonce is consumed on first successful use.
+The URL returns the latest 10 full messages, newest first, including candidate OTPs and links. It never contains the private key and can be fetched repeatedly until expiry. It is a bearer secret: anyone holding it can read the mailbox until it expires. The default lifetime is 10 minutes and maximum is 15 minutes. It cannot mutate the mailbox.
+
+`signedUrl(path)` remains for one release as a deprecated single-use URL for one exact REST GET.
 
 ## Hosted MCP proof
 
@@ -88,7 +90,7 @@ Supply `args` to the `list_messages` tool exposed by `https://agent-temp-mail.co
       "command": "npx",
       "args": [
         "--yes",
-        "--package=agent-temp-mail@0.3.1",
+        "--package=agent-temp-mail@0.4.0",
         "agent-temp-mail-mcp"
       ],
       "env": { "MAIL_KEY_FILE": "/absolute/private/mail.key.json" }
@@ -115,14 +117,15 @@ Tools:
 export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
 mkdir -p "$(dirname "$MAIL_KEY_FILE")"
 
-npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail keygen
-npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail inspect
-npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail list '{"since":"2026-09-16T12:00:00Z"}'
-npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail configure '{"retention_seconds":604800}'
-npx --yes --package=agent-temp-mail@0.3.1 agent-temp-mail purge
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail keygen
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail read-url
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail inspect
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail list '{"since":"2026-09-16T12:00:00Z"}'
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail configure '{"retention_seconds":604800}'
+npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail purge
 ```
 
-`keygen` only creates the local key file and prints the immediately usable address.
+`keygen` only creates the local key file and prints the immediately usable address. `read-url` prints a reusable read URL with a 10-minute default; pass a TTL in seconds as its optional argument.
 
 ## Function-tool bridge
 
