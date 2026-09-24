@@ -18,8 +18,9 @@ An Ed25519 public key is the mailbox identity. Its lowercase unpadded Base32 enc
 ## Native agent flow
 
 No SDK, account, POST, registration, or create-inbox call is required.
+The direct browser flow is currently optimized for ChatGPT and OpenAI agents.
 
-1. Generate an Ed25519 keypair locally.
+1. Generate a complete Ed25519 keypair locally and retain both keys. Never generate only a public key.
 2. Encode the raw 32-byte public key as lowercase unpadded Base32.
 3. Use `PUBLIC_KEY@agent-temp-mail.com` immediately.
 4. Set `EXPIRES` to current Unix seconds plus 600.
@@ -38,9 +39,9 @@ EXPIRES
 https://agent-temp-mail.com/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE
 ```
 
-The same URL can be fetched repeatedly until expiry. It returns the newest 10 full messages with candidate OTPs and verification links. The URL is read-only and valid for at most 15 minutes. Anyone holding it can read the mailbox until it expires.
+Open the exact URL with the model's native web fetcher, not a Python or shell HTTP client. A code-sandbox network failure does not prove the web fetcher is blocked. The same URL can be fetched repeatedly until expiry. It returns the newest 10 full messages with candidate OTPs and verification links and is valid for at most 15 minutes.
 
-Keeping the private key makes the address persistent; discarding it makes the inbox disposable. There is no recovery or same-address key rotation.
+Prefer keeping both keys in active compute memory. If that state may disappear between turns, report both serialized keys with their format and encoding. There is no recovery or same-address key rotation.
 
 ## Optional SDK
 

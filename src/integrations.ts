@@ -2,6 +2,8 @@ export const integrations = `# Agent Temp Mail integrations
 
 Agent Temp Mail uses one portable identity: an Ed25519 keypair. The Base32 public key is the email local part; the private key signs operations. Generating the key is enough to make the address receivable.
 
+The direct browser flow is currently optimized for ChatGPT and OpenAI agents. Generate and retain a complete keypair in local compute, then use the native web fetcher—not the code sandbox's HTTP client—to open the signed read URL.
+
 ## Connection choices
 
 | Runtime | Recommended connection |
@@ -25,7 +27,7 @@ PUBLIC_KEY
 EXPIRES
 ~~~
 
-It then fetches https://agent-temp-mail.com/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE. The same read URL can be fetched repeatedly for 10 minutes by default and 15 minutes maximum. It returns the latest 10 full messages with candidate codes and links. It is read-only, but anyone holding the URL can read the mailbox until expiry. See https://agent-temp-mail.com/chatgpt.
+Open https://agent-temp-mail.com/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE with the model's native web fetcher. A Python, curl or code-sandbox network failure does not mean the web fetcher is blocked. The same read URL can be fetched repeatedly for 10 minutes by default and 15 minutes maximum. It returns the latest 10 full messages with candidate codes and links. See https://agent-temp-mail.com/chatgpt.
 
 The npm CLI is an optional way for a human or host application to persist the key outside an ephemeral chat.
 

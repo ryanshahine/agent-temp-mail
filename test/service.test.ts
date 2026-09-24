@@ -474,16 +474,19 @@ describe("agent interfaces", () => {
     const home = await fetchHandler(new Request(origin), env);
     expect(home.headers.get("Content-Type")).toContain("text/html");
     const homeText = await home.text();
-    expect(homeText).toContain("read_url");
-    expect(homeText).toContain("no SDK, account, or POST");
+    expect(homeText).toContain("Currently optimized for OpenAI agents");
+    expect(homeText).toContain("generate one real Ed25519 keypair");
+    expect(homeText).toContain("native web fetcher");
     expect(homeText).not.toContain("npx");
     const llms = await fetchHandler(new Request(origin + "/llms.txt"), env);
     expect(llms.headers.get("Content-Type")).toContain("text/plain");
     expect(await llms.text()).toContain("agent-temp-mail:read:v1");
     const chatgpt = await fetchHandler(new Request(origin + "/chatgpt"), env);
     const chatgptText = await chatgpt.text();
-    expect(chatgptText).toContain("No npm package");
+    expect(chatgptText).toContain("No SDK, terminal setup");
     expect(chatgptText).toContain("agent-temp-mail:read:v1");
+    expect(chatgptText).toContain("retain both keys");
+    expect(chatgptText).toContain("OpenAI web fetcher");
     expect(chatgptText).not.toContain("npx");
     const spec = await (
       await fetchHandler(new Request(origin + "/openapi.json"), env)

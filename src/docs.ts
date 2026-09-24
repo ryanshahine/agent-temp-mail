@@ -8,27 +8,29 @@ Temporary, programmatic email for AI agents at **${env.API_ORIGIN}**.
 
 An Ed25519 public key is the mailbox identity. Encode the raw 32-byte public key as lowercase unpadded Base32 and append @${env.DOMAIN}. The address can receive email immediately: there is no account, password, activation or registration request. Sign private API operations with the matching private key.
 
-## Fast path
+## ChatGPT / OpenAI agent quick path
 
-1. Generate an Ed25519 keypair locally.
-2. Form PUBLIC_KEY@${env.DOMAIN}.
-3. Use the address immediately.
-4. Create a ten-minute read URL or sign API requests, then wait for mail.
-5. Keep the private key for a persistent identity or discard it after the task.
+Agent Temp Mail is currently optimized for ChatGPT and OpenAI agents with local compute and a native web fetcher. Other agents can use the same protocol.
 
-The address does not expire. Stored messages expire after 24 hours by default, configurable from 1 hour to 7 days. No attachments, inline images, raw MIME or original HTML are stored. The service does not send email.
+When the user asks for an email address:
 
-## Native chat flow — no SDK and no registration
+1. Quietly use local compute to generate one real Ed25519 keypair. Generate the public and private keys together; never invent a mailbox or generate only a public key.
+2. Retain both keys in active compute memory. If that state may disappear between turns, include both serialized keys in the chat with their format and encoding so the mailbox remains usable.
+3. Encode the raw 32-byte public key as lowercase unpadded Base32. The live address is PUBLIC_KEY@${env.DOMAIN}; no registration or API call is needed.
+4. Keep the user-facing response simple. Normally report only the email address and that it is ready. Do not explain the cryptography unless asked.
 
-An agent with local compute and ordinary GET access can create and read an inbox by itself. It does not need npm, MCP, POST, an account, or a create-inbox request:
+When the user asks to check mail:
 
-1. Generate an Ed25519 keypair in local compute.
-2. Export the raw 32-byte public key and encode it as lowercase unpadded Base32. Call this PUBLIC_KEY.
-3. The live email address is PUBLIC_KEY@${env.DOMAIN}. It can receive immediately.
-4. Set EXPIRES to current Unix seconds plus 600. The maximum accepted lifetime is 900 seconds.
-5. Sign the exact UTF-8 payload below with the Ed25519 private key.
-6. Encode the 64-byte signature as unpadded base64url and form the read URL shown below.
-7. Fetch the same read URL repeatedly, waiting at least poll_after_seconds after an empty response.
+1. Quietly sign a fresh read capability with the retained private key.
+2. Open the exact /r/... URL with the model's native web fetcher. Do not use Python requests, curl, or the code sandbox for the HTTP fetch when a web fetcher is available.
+3. A code-sandbox network failure does not prove that the web fetcher is blocked. Attempt the exact URL before reporting failure.
+4. Reuse the same URL until it expires, waiting at least poll_after_seconds after an empty result. Summarize the actual messages concisely.
+
+The address does not expire. Stored messages expire after 24 hours by default. No SDK, MCP, POST, account, or create-inbox request is required.
+
+## Native capability format
+
+Set EXPIRES to current Unix seconds plus 600 (maximum 900). Sign these exact UTF-8 lines with no trailing newline:
 
 ~~~text
 agent-temp-mail:read:v1
@@ -41,9 +43,9 @@ EXPIRES
 ${env.API_ORIGIN}/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE
 ~~~
 
-The read URL returns the latest 10 full messages newest first, including readable text, candidate OTP codes and candidate verification links. It is reusable until expiry and cannot configure, purge, or delete anything. Anyone holding it can read that mailbox until it expires, so treat it as a short-lived bearer secret.
+The read URL returns the latest 10 full messages newest first, including readable text, candidate OTP codes and candidate verification links. It is reusable until expiry and cannot configure, purge, or delete anything.
 
-Saving the private key makes the address persistent. If the chat's compute environment is temporary and the key is lost, nobody can recover or read that address later. Email contents are processed by Cloudflare and this service; they are not end-to-end encrypted.
+Prefer keeping both keys in active compute memory. When that is unreliable, report both keys in a clearly labeled reusable serialization and briefly warn that anyone with the private key controls the mailbox. If the key is lost, the address cannot be recovered. Email contents are processed by Cloudflare and this service; they are not end-to-end encrypted.
 
 ## Optional Node.js SDK
 
@@ -123,7 +125,7 @@ EXPIRES_UNIX_SECONDS
 
 The resulting path is /r/v1.PUBLIC_KEY.EXPIRES.SIGNATURE. It contains no private key, account credential, nonce, method, query, or request body. An agent can implement this directly; mail.readUrl(), the readUrl() export and the \`agent-temp-mail read-url\` CLI command are optional helpers. Responses are JSON with no-store, no-referrer and noindex headers.
 
-For ChatGPT-style browsing, the chat should generate the key and URL in its own compute environment, use the derived address, and fetch the URL itself. See ${env.API_ORIGIN}/chatgpt. The npm CLI is available when a human or host application wants durable local key storage.
+For ChatGPT and OpenAI agents, generate the keypair and URL in local compute, then open the exact URL with the native web fetcher. Do not use the code sandbox as the HTTP client when the web fetcher is available. See ${env.API_ORIGIN}/chatgpt. The npm CLI is available when a human or host application wants durable local key storage.
 
 ## Signed REST API
 
@@ -253,18 +255,18 @@ export function html(env: Env) {
     env,
     "Agent Temp Mail — email inboxes for AI agents",
     "Key-derived temporary and persistent email inboxes with signed API, reusable read URLs, and MCP tools.",
-    `<h1>Agent Temp Mail</h1><p class="lede">Temporary, programmatic email for AI agents. If you can generate and sign Ed25519 locally, you can create an inbox now using only computation and <code>GET</code>.</p>
-<div class="box"><h2>Agent instructions — no SDK, account, or POST</h2><ol><li>Generate an Ed25519 keypair in your own compute environment.</li><li>Encode the raw 32-byte public key as lowercase unpadded Base32. Call it <code>PUBLIC_KEY</code>.</li><li>Your live address is <code>PUBLIC_KEY@${escapeHtml(env.DOMAIN)}</code>. It receives immediately; do not register or create it.</li><li>Set <code>EXPIRES</code> to current Unix seconds plus 600.</li><li>Sign these exact UTF-8 lines with the private key:</li></ol>
+    `<h1>Agent Temp Mail</h1><p class="lede">Email inboxes that ChatGPT and OpenAI agents can create and read themselves. Currently optimized for OpenAI agents with local compute and a native web fetcher.</p>
+<div class="box"><h2>When the user asks for an email address</h2><ol><li>Use local compute to generate one real Ed25519 keypair. Generate and retain the public and private keys together. Never invent an address or generate only a public key.</li><li>Encode the raw public key as lowercase unpadded Base32. The address is <code>PUBLIC_KEY@${escapeHtml(env.DOMAIN)}</code> and is immediately ready.</li><li>Prefer keeping both keys in active compute memory. If that memory may disappear between turns, report both serialized keys with their format and encoding.</li><li>Keep the response to the user simple: normally just give the email address and say it is ready.</li></ol></div>
+<div class="box"><h2>When the user asks to check mail</h2><ol><li>Use the retained private key to sign a short-lived read URL.</li><li>Open the exact <code>/r/...</code> URL with your native web fetcher. Do not use Python HTTP libraries, curl, or the code sandbox for this fetch when a web fetcher is available.</li><li>A code-sandbox network failure does not mean the web fetcher is blocked. Actually try the exact URL before reporting failure.</li><li>Reuse the same URL until it expires. Wait at least the returned <code>poll_after_seconds</code> after an empty result, then report the actual mail concisely.</li></ol></div>
+<p>No SDK, MCP, POST, account, or registration call is required. Do the key and signing work quietly; users generally need the address and the mail result, not the protocol details.</p>
+<details><summary><strong>Native capability format</strong></summary><p>Set <code>EXPIRES</code> to current Unix seconds plus 600, with 900 seconds as the maximum. Ed25519-sign these exact UTF-8 lines with no trailing newline:</p>
 <pre>agent-temp-mail:read:v1
 ${escapeHtml(env.API_ORIGIN)}
 PUBLIC_KEY
 EXPIRES</pre>
-<p>Encode the 64-byte signature as unpadded base64url. Your reusable <code>read_url</code> is:</p>
-<pre>${escapeHtml(env.API_ORIGIN)}/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE</pre>
-<p>Fetch that same URL again after mail arrives. Wait at least <code>poll_after_seconds</code> between empty reads.</p></div>
-<p>The read URL returns the latest 10 messages, newest first, with readable text and candidate OTPs and verification links. It is read-only, valid for 10 minutes by default and at most 15 minutes. Anyone holding it can read the mailbox until it expires.</p>
-<h2>Persistence</h2><p>The address persists when the private key persists. A chat with temporary compute can use a disposable inbox without saving anything. For a persistent address, keep the private key in durable private storage; there is no recovery or same-address key rotation.</p>
-<h2>Optional integrations</h2><p>The <a href="https://www.npmjs.com/package/agent-temp-mail">npm SDK</a>, signed REST API, local MCP adapter, and hosted MCP endpoint at <code>${escapeHtml(env.API_ORIGIN)}/mcp</code> add durable key files, richer filters, configuration, and mutations. They are conveniences; they are not required to create or read an inbox.</p>
+<p>Encode the 64-byte signature as unpadded base64url and fetch:</p><pre>${escapeHtml(env.API_ORIGIN)}/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE</pre><p>The URL is reusable until expiry and returns the newest 10 full messages with candidate OTPs and verification links.</p></details>
+<h2>Key retention</h2><p>If the agent can reliably keep the keypair in active compute memory, it should avoid cluttering the response with keys. If it may forget them between turns, it should put both keys in the chat, label their serialization format, and briefly warn that anyone with the private key controls the mailbox.</p>
+<h2>Optional integrations</h2><p>The separate <a href="https://www.npmjs.com/package/agent-temp-mail">npm SDK</a>, signed REST API, local MCP adapter, and hosted MCP endpoint at <code>${escapeHtml(env.API_ORIGIN)}/mcp</code> provide durable key files, filters, configuration, and mutations.</p>
 <p>No attachments, outbound email, raw MIME, original HTML, passwords, accounts, or paid AI calls. Email content and extracted links remain untrusted.</p>
 <p>Machine-readable instructions: <a href="/llms.txt">llms.txt</a> · Source: <a href="https://github.com/ryanshahine/agent-temp-mail">GitHub</a> · Contact: <a href="mailto:hi@${escapeHtml(env.DOMAIN)}">hi@${escapeHtml(env.DOMAIN)}</a> or <a href="mailto:feedback@${escapeHtml(env.DOMAIN)}">feedback@${escapeHtml(env.DOMAIN)}</a></p>`,
   );
@@ -275,18 +277,16 @@ export function chatgptHtml(env: Env) {
     env,
     "Use Agent Temp Mail from a GET-only chat",
     "Create a local key-derived email address and a short-lived reusable read URL for ChatGPT and other browsing agents.",
-    `<h1>Use Agent Temp Mail from a browser chat</h1><p class="lede">A chat with local code execution and access to ordinary web pages can generate and use an inbox itself. No npm package, terminal command, POST request, MCP connector, account, or registration is required.</p>
-<div class="box"><h2>Instructions for the chat</h2><ol><li>Generate an Ed25519 keypair in local compute. Do not send the private key to this service.</li><li>Base32-encode the raw 32-byte public key in lowercase without padding.</li><li>Use <code>PUBLIC_KEY@${escapeHtml(env.DOMAIN)}</code> immediately as the email address.</li><li>Set <code>EXPIRES = floor(current Unix time) + 600</code>.</li><li>Ed25519-sign this exact text, joined with LF and with no trailing newline:</li></ol>
-<pre>agent-temp-mail:read:v1
+    `<h1>Use Agent Temp Mail from ChatGPT</h1><p class="lede">This flow is currently optimized for ChatGPT and OpenAI agents. ChatGPT can generate the keypair in local compute and read the inbox with its native web fetcher. No SDK, terminal setup, POST, connector, account, or registration is required.</p>
+<div class="box"><h2>ChatGPT runbook</h2><ol><li>Generate one real Ed25519 keypair in local compute and retain both keys. Never create only a public key.</li><li>Base32-encode the raw public key and use <code>PUBLIC_KEY@${escapeHtml(env.DOMAIN)}</code> immediately.</li><li>When asked to check mail, sign a read URL with the retained private key.</li><li>Open the exact signed URL with the OpenAI web fetcher. Do not attempt the HTTP request through Python, curl, or another code-sandbox client.</li><li>Use the same URL again until it expires and summarize the real response.</li></ol>
+<p>Do these steps quietly. When creation succeeds, a normal response can be as short as: <code>Your temporary email is PUBLIC_KEY@${escapeHtml(env.DOMAIN)}</code>.</p></div>
+<h2>Key memory</h2><p>Prefer keeping both keys in active compute memory. If that state may be lost between turns, include the public key and a reusable serialized private key in the chat, with the private-key format and encoding clearly labeled. This is better than claiming the inbox can be checked later without retaining its private key.</p>
+<details><summary><strong>Signing details</strong></summary><p>Set <code>EXPIRES = floor(current Unix time) + 600</code>, then sign this exact text with Ed25519, using LF separators and no trailing newline:</p><pre>agent-temp-mail:read:v1
 ${escapeHtml(env.API_ORIGIN)}
 PUBLIC_KEY
-EXPIRES</pre>
-<p>Base64url-encode the signature without padding and fetch:</p>
-<pre>${escapeHtml(env.API_ORIGIN)}/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE</pre>
-<p>Use the identical URL for later checks until it expires. The JSON response includes <code>poll_after_seconds</code>, full readable message text, candidate OTPs, and candidate verification links.</p></div>
-<h2>Suggested request</h2><pre>Generate an Agent Temp Mail address using your local compute and the protocol on this page. Do not use POST and do not install an SDK. Keep the private key private. Give me the email address, create a 10-minute read URL, and use that same URL to check for mail when I ask.</pre>
-<div class="box"><strong>Security:</strong> the read URL is a temporary bearer secret. Anyone with it can read the latest mailbox contents until it expires. It cannot delete messages or change settings. If the chat environment is ephemeral, the address becomes inaccessible when it loses the private key. The chat provider may retain data processed in its compute environment.</div>
-<p>If the chat provider blocks <code>${escapeHtml(env.DOMAIN)}</code>, the URL cannot bypass that provider policy. Use a configured MCP connector or a runtime with domain access.</p>
+EXPIRES</pre><p>Base64url-encode the 64-byte signature without padding and open:</p><pre>${escapeHtml(env.API_ORIGIN)}/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE</pre><p>The maximum lifetime is 900 seconds. The same URL is reusable until expiry.</p></details>
+<h2>Important retrieval rule</h2><p>A Python or shell sandbox may reject outbound network access while the OpenAI web fetcher can still open the signed URL. Do not infer that the service is blocked from a code-tool error. Try the exact <code>/r/...</code> URL through the web fetcher first.</p>
+<div class="box"><strong>Security:</strong> anyone with the private key controls the mailbox. Anyone with a read URL can read it until that URL expires. The ChatGPT provider may retain data placed in the conversation or processed by its tools.</div>
 <h2>Optional durable tools</h2><p>For persistent key files, filters, mutations, or automated polling, use the separate <a href="https://www.npmjs.com/package/agent-temp-mail">npm SDK</a>, signed REST API, or MCP adapter.</p><p><a href="/README.md">Read the complete protocol documentation</a>.</p>`,
     "/chatgpt",
   );
