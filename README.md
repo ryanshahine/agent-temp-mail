@@ -15,7 +15,34 @@ An Ed25519 public key is the mailbox identity. Its lowercase unpadded Base32 enc
 - No outbound mail, attachments, raw MIME, original HTML or paid AI calls.
 - Reserved private contact inboxes: `hi@agent-temp-mail.com` and `feedback@agent-temp-mail.com`.
 
-## SDK
+## Native agent flow
+
+No SDK, account, POST, registration, or create-inbox call is required.
+
+1. Generate an Ed25519 keypair locally.
+2. Encode the raw 32-byte public key as lowercase unpadded Base32.
+3. Use `PUBLIC_KEY@agent-temp-mail.com` immediately.
+4. Set `EXPIRES` to current Unix seconds plus 600.
+5. Sign these exact UTF-8 lines, joined with LF and without a trailing newline:
+
+```text
+agent-temp-mail:read:v1
+https://agent-temp-mail.com
+PUBLIC_KEY
+EXPIRES
+```
+
+6. Encode the 64-byte signature as unpadded base64url and fetch:
+
+```text
+https://agent-temp-mail.com/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE
+```
+
+The same URL can be fetched repeatedly until expiry. It returns the newest 10 full messages with candidate OTPs and verification links. The URL is read-only and valid for at most 15 minutes. Anyone holding it can read the mailbox until it expires.
+
+Keeping the private key makes the address persistent; discarding it makes the inbox disposable. There is no recovery or same-address key rotation.
+
+## Optional SDK
 
 Node.js 22.12+:
 

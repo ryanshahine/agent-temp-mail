@@ -16,15 +16,18 @@ A provider sandbox can block arbitrary domains even when its hosted MCP connecto
 
 ## Browsing-only chat
 
-Generate the key and short-lived read capability locally:
+No SDK or POST request is required. The chat can generate an Ed25519 keypair in its own compute environment, use the Base32 raw public key as the email local part, and sign this exact payload:
 
-~~~sh
-export MAIL_KEY_FILE="$HOME/.config/agent-temp-mail/identity.key.json"
-npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail keygen
-npx --yes --package=agent-temp-mail@0.4.0 agent-temp-mail read-url
+~~~text
+agent-temp-mail:read:v1
+https://agent-temp-mail.com
+PUBLIC_KEY
+EXPIRES
 ~~~
 
-The same read URL can be fetched repeatedly for 10 minutes by default and 15 minutes maximum. It returns the latest 10 full messages with candidate codes and links. It is read-only, but anyone holding the URL can read the mailbox until expiry. See https://agent-temp-mail.com/chatgpt.
+It then fetches https://agent-temp-mail.com/r/v1.PUBLIC_KEY.EXPIRES.BASE64URL_SIGNATURE. The same read URL can be fetched repeatedly for 10 minutes by default and 15 minutes maximum. It returns the latest 10 full messages with candidate codes and links. It is read-only, but anyone holding the URL can read the mailbox until expiry. See https://agent-temp-mail.com/chatgpt.
+
+The npm CLI is an optional way for a human or host application to persist the key outside an ephemeral chat.
 
 ## Local MCP
 

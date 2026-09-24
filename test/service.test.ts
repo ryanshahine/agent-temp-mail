@@ -473,12 +473,18 @@ describe("agent interfaces", () => {
   it("publishes Markdown and machine-readable contracts without credentials", async () => {
     const home = await fetchHandler(new Request(origin), env);
     expect(home.headers.get("Content-Type")).toContain("text/html");
-    expect(await home.text()).toContain("read_url");
+    const homeText = await home.text();
+    expect(homeText).toContain("read_url");
+    expect(homeText).toContain("no SDK, account, or POST");
+    expect(homeText).not.toContain("npx");
     const llms = await fetchHandler(new Request(origin + "/llms.txt"), env);
     expect(llms.headers.get("Content-Type")).toContain("text/plain");
     expect(await llms.text()).toContain("agent-temp-mail:read:v1");
     const chatgpt = await fetchHandler(new Request(origin + "/chatgpt"), env);
-    expect(await chatgpt.text()).toContain("agent-temp-mail read-url");
+    const chatgptText = await chatgpt.text();
+    expect(chatgptText).toContain("No npm package");
+    expect(chatgptText).toContain("agent-temp-mail:read:v1");
+    expect(chatgptText).not.toContain("npx");
     const spec = await (
       await fetchHandler(new Request(origin + "/openapi.json"), env)
     ).json();
